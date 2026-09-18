@@ -1,0 +1,12 @@
+{
+  "usuario": "seu.usuario",
+  "senha": "opcional — apague esta linha para digitar a senha a cada execução",
+  "respostas": {
+    "Sexo": "Masculino",
+    "É aluno da rede municipal de ensino?": "Não",
+    "Em que período você frequenta a Nave do Conhecimento?": "Tarde",
+    "Qual a sua faixa etária?": "18 a 60 anos",
+    "Qual atividade você realizou?": "Curso"
+  },
+  "resposta_padrao": "Muito Satisfeito"
+}

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+config.json
+erro.png
+.playwright-mcp/
+contas.json
+capturas/
+build/
+dist/

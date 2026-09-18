@@ -1,0 +1,323 @@
+"""Testa a interface web (servidor.py) com a automação simulada.
+
+Rodar:  .venv/bin/python -m unittest testes/teste_servidor.py -v
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pesquisa  # noqa: E402
+import servidor  # noqa: E402
+
+RESPOSTAS = {
+    "Sexo": "Feminino",
+    "É aluno da rede municipal de ensino?": "Sim",
+    "Em que período você frequenta a Nave do Conhecimento?": "Noite",
+    "Qual a sua faixa etária?": "18 a 60 anos",
+    "Qual atividade você realizou?": "Oficina",
+}
+
+
+class NavegadorFalso:
+    """Substitui sync_playwright(): nada de navegador de verdade."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    @property
+    def chromium(self):
+        return self
+
+    def launch(self, headless, **opcoes):
+        return self
+
+    def new_context(self):
+        return self
+
+    def new_page(self):
+        pagina = mock.Mock(name="pagina")
+        pagina.screenshot.side_effect = lambda path, **k: Path(path).write_bytes(b"png")
+        return pagina
+
+    def close(self):
+        pass
+
+
+class TesteServidor(unittest.TestCase):
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(self.pasta.cleanup)
+        self.config = Path(self.pasta.name) / "config.json"
+        self.captura = Path(self.pasta.name) / "erro.png"
+        self.contas = Path(self.pasta.name) / "contas.json"
+        self.capturas = Path(self.pasta.name) / "capturas"
+        for modulo, alvo, valor in (
+            (pesquisa, "CONFIG_PADRAO", self.config),
+            (pesquisa, "CAPTURA_ERRO", self.captura),
+            (pesquisa, "sync_playwright", NavegadorFalso),
+            (servidor, "CONTAS", self.contas),
+            (servidor, "CAPTURAS", self.capturas),
+        ):
+            p = mock.patch.object(modulo, alvo, valor)
+            p.start()
+            self.addCleanup(p.stop)
+
+        servidor.EXECUCAO = servidor.Execucao()
+        pesquisa.log.addHandler(servidor.ManipuladorLog(servidor.EXECUCAO))
+        self.addCleanup(lambda: pesquisa.log.handlers.clear())
+        pesquisa.log.setLevel("INFO")
+
+        self.http = servidor.criar_servidor(0)
+        threading.Thread(target=self.http.serve_forever, daemon=True).start()
+        self.addCleanup(self.http.server_close)
+        self.addCleanup(self.http.shutdown)
+        self.base = f"http://127.0.0.1:{self.http.server_address[1]}"
+
+    # -- utilitários --------------------------------------------------------
+
+    def get(self, caminho):
+        with urlopen(self.base + caminho) as r:
+            return r.status, r.headers.get("Content-Type"), r.read()
+
+    def post(self, caminho, dados=None):
+        req = Request(
+            self.base + caminho,
+            data=json.dumps(dados or {}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except HTTPError as e:
+            with e:
+                corpo = e.read()
+            return e.code, json.loads(corpo) if corpo.startswith(b"{") else corpo.decode()
+
+    def esperar_estado(self, *estados, timeout=5):
+        limite = time.monotonic() + timeout
+        while time.monotonic() < limite:
+            _, _, corpo = self.get("/api/estado")
+            s = json.loads(corpo)
+            if s["estado"] in estados:
+                return s
+            time.sleep(0.05)
+        self.fail(f"estado {estados} não alcançado; último: {s}")
+
+    def pedido(self, **extra):
+        return {"usuario": "aluna", "senha": "1234", "respostas": RESPOSTAS,
+                "resposta_padrao": "Muito Satisfeito", "enviar": True, "headless": True, **extra}
+
+    # -- testes -------------------------------------------------------------
+
+    def test_pagina_e_config_inicial(self):
+        status, tipo, corpo = self.get("/")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", tipo)
+        self.assertIn("Pesquisa de Satisfação", corpo.decode())
+
+        _, _, corpo = self.get("/api/config")
+        c = json.loads(corpo)
+        self.assertEqual(c["usuario"], "")
+        self.assertFalse(c["senha_salva"])
+        self.assertEqual([p["texto"] for p in c["perguntas"]], [p for p, _ in pesquisa.PERGUNTAS_PERFIL])
+        self.assertEqual(c["resposta_padrao"], "Muito Satisfeito")
+        self.assertEqual(c["contas"], [])
+
+    def test_validacao(self):
+        self.assertEqual(self.post("/api/executar", self.pedido(usuario=""))[1]["erro"], "Informe o usuário.")
+        self.assertIn("Responda: Sexo", self.post("/api/executar", self.pedido(respostas={}))[1]["erro"])
+        self.assertEqual(self.post("/api/executar", self.pedido(senha=""))[1]["erro"], "Informe a senha.")
+        self.assertFalse(self.config.exists())  # nada salvo enquanto o pedido é inválido
+
+    def test_executa_salva_config_e_registra(self):
+        def executar_falso(pagina, config, senha, enviar=True):
+            pesquisa.log.info("Login OK (%s)", config["usuario"])
+            pesquisa.log.info("  ✔ Sexo → %s", config["respostas"]["Sexo"])
+            pesquisa.log.info("  ✅ Pesquisa respondida com sucesso!")
+            return 1
+
+        with mock.patch.object(pesquisa, "executar", executar_falso):
+            status, corpo = self.post("/api/executar", self.pedido(guardar_senha=False))
+            self.assertEqual((status, corpo), (200, {"ok": True}))
+            s = self.esperar_estado("concluido")
+
+        textos = [l["texto"] for l in s["linhas"]]
+        self.assertEqual(textos, ["Login OK (aluna)", "  ✔ Sexo → Feminino", "  ✅ Pesquisa respondida com sucesso!"])
+        self.assertFalse(s["captura"])
+
+        salvo = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(salvo["usuario"], "aluna")
+        self.assertEqual(salvo["respostas"], RESPOSTAS)
+        self.assertNotIn("senha", salvo)
+        self.assertTrue(json.loads(self.get("/api/config")[2])["respostas"]["Sexo"] == "Feminino")
+
+        # polling incremental: só devolve as linhas novas
+        _, _, corpo = self.get("/api/estado?desde=2")
+        self.assertEqual([l["n"] for l in json.loads(corpo)["linhas"]], [2])
+
+    def test_senha_guardada_e_reutilizada(self):
+        with mock.patch.object(pesquisa, "executar", lambda *a, **k: 0):
+            self.post("/api/executar", self.pedido(guardar_senha=True))
+            self.esperar_estado("concluido")
+        self.assertEqual(json.loads(self.config.read_text())["senha"], "1234")
+        self.assertTrue(json.loads(self.get("/api/config")[2])["senha_salva"])
+
+        recebidas = []
+        with mock.patch.object(pesquisa, "executar", lambda p, c, senha, **k: recebidas.append(senha)):
+            status, _ = self.post("/api/executar", self.pedido(senha="", guardar_senha=True))
+            self.assertEqual(status, 200)
+            self.esperar_estado("concluido")
+        self.assertEqual(recebidas, ["1234"])
+
+    def test_erro_gera_captura_e_aguarda_navegador_visivel(self):
+        def executar_falso(pagina, config, senha, enviar=True):
+            raise pesquisa.ErroAutomacao("Login falhou: credenciais incorretas")
+
+        with mock.patch.object(pesquisa, "executar", executar_falso):
+            self.post("/api/executar", self.pedido(headless=False))
+            s = self.esperar_estado("aguardando")
+            self.assertTrue(s["captura"])
+            self.assertEqual(self.get("/erro.png")[1], "image/png")
+            self.assertIn("❌ Login falhou: credenciais incorretas", [l["texto"] for l in s["linhas"]])
+
+            # enquanto aguarda, não aceita outra execução
+            self.assertEqual(self.post("/api/executar", self.pedido())[0], 409)
+
+            self.assertEqual(self.post("/api/fechar")[0], 200)
+            s = self.esperar_estado("erro")
+        self.assertEqual(s["estado"], "erro")
+
+    def test_erro_sem_navegador_visivel_termina_direto(self):
+        def executar_falso(*a, **k):
+            raise pesquisa.ErroAutomacao("qualquer coisa")
+
+        with mock.patch.object(pesquisa, "executar", executar_falso):
+            self.post("/api/executar", self.pedido(headless=True))
+            s = self.esperar_estado("erro")
+        self.assertTrue(s["captura"])
+        self.assertTrue(self.captura.exists())
+
+    def test_sem_enviar_com_navegador_visivel_aguarda(self):
+        with mock.patch.object(pesquisa, "executar", lambda *a, **k: 0):
+            self.post("/api/executar", self.pedido(enviar=False, headless=False))
+            s = self.esperar_estado("aguardando")
+            self.assertIn("Fechar navegador", s["linhas"][-1]["texto"])
+            self.post("/api/fechar")
+            self.esperar_estado("concluido")
+
+    def test_falha_inesperada_nao_derruba_servidor(self):
+        def executar_falso(*a, **k):
+            raise RuntimeError("bum")
+
+        with mock.patch.object(pesquisa, "executar", executar_falso):
+            self.post("/api/executar", self.pedido())
+            s = self.esperar_estado("erro")
+        self.assertTrue(any("Falha inesperada" in l["texto"] for l in s["linhas"]))
+        self.assertEqual(self.get("/")[0], 200)
+
+    # -- várias contas ------------------------------------------------------
+
+    def contas_exemplo(self):
+        return [
+            {"usuario": "ana", "senha": "a1", "respostas": RESPOSTAS},
+            {"usuario": "bia", "senha": "b2", "respostas": {**RESPOSTAS, "Sexo": "Masculino", "Qual a sua faixa etária?": "06 a 11 anos"}},
+        ]
+
+    def test_contas_salvar_validar_e_nao_expor_senha(self):
+        status, corpo = self.post("/api/contas", {"contas": self.contas_exemplo()})
+        self.assertEqual((status, corpo), (200, {"ok": True, "contas": 2}))
+        salvo = json.loads(self.contas.read_text(encoding="utf-8"))["contas"]
+        self.assertEqual([c["senha"] for c in salvo], ["a1", "b2"])
+
+        publico = json.loads(self.get("/api/config")[2])["contas"]
+        self.assertEqual([c["usuario"] for c in publico], ["ana", "bia"])
+        self.assertEqual([c["senha"] for c in publico], ["", ""])
+
+        # a página devolve a lista sem senhas; as salvas são mantidas
+        status, _ = self.post("/api/contas", {"contas": publico})
+        self.assertEqual(status, 200)
+        self.assertEqual([c["senha"] for c in json.loads(self.contas.read_text())["contas"]], ["a1", "b2"])
+
+        self.assertIn("Falta a senha de novo", self.post("/api/contas", {"contas": [{"usuario": "novo", "respostas": RESPOSTAS}]})[1]["erro"])
+        self.assertIn("repetida", self.post("/api/contas", {"contas": self.contas_exemplo() + self.contas_exemplo()[:1]})[1]["erro"])
+        self.assertIn("Responda: Sexo", self.post("/api/contas", {"contas": [{"usuario": "x", "senha": "1", "respostas": {}}]})[1]["erro"])
+        self.assertIn("sem usuário", self.post("/api/contas", {"contas": [{"usuario": " ", "senha": "1", "respostas": RESPOSTAS}]})[1]["erro"])
+
+    def test_lote_vazio(self):
+        self.assertEqual(self.post("/api/executar-lote", {})[1]["erro"], "A lista de contas está vazia.")
+
+    def test_lote_executa_cada_conta_com_seu_config(self):
+        self.post("/api/contas", {"contas": self.contas_exemplo()})
+        recebidos = []
+
+        def executar_falso(pagina, config, senha, enviar=True):
+            recebidos.append((config["usuario"], senha, config["respostas"]["Sexo"], config["resposta_padrao"], enviar))
+            pesquisa.log.info("  ✅ Pesquisa respondida com sucesso!")
+            return 1
+
+        with mock.patch.object(pesquisa, "executar", executar_falso):
+            status, corpo = self.post("/api/executar-lote", {"resposta_padrao": "Satisfeito", "enviar": False, "headless": True})
+            self.assertEqual((status, corpo), (200, {"ok": True, "contas": 2}))
+            s = self.esperar_estado("concluido")
+
+        self.assertEqual(recebidos, [
+            ("ana", "a1", "Feminino", "Satisfeito", False),
+            ("bia", "b2", "Masculino", "Satisfeito", False),
+        ])
+        textos = [l["texto"] for l in s["linhas"]]
+        self.assertEqual(textos[0], "Conta 1/2: ana")
+        self.assertEqual(textos[2], "Conta 2/2: bia")
+        self.assertEqual(textos[-1], "Resumo: 2 conta(s) concluída(s) sem erros.")
+
+    def test_lote_continua_apos_falha_e_gera_captura_por_conta(self):
+        self.post("/api/contas", {"contas": self.contas_exemplo()})
+
+        def executar_falso(pagina, config, senha, enviar=True):
+            if config["usuario"] == "ana":
+                raise pesquisa.ErroAutomacao("Login falhou: credenciais incorretas")
+            return 1
+
+        with mock.patch.object(pesquisa, "executar", executar_falso):
+            self.post("/api/executar-lote", {"headless": False})
+            s = self.esperar_estado("erro")
+
+        erro = next(l for l in s["linhas"] if l["nivel"] == "error" and "Login falhou" in l["texto"])
+        self.assertEqual(erro["captura"], "01-ana.png")
+        self.assertEqual(self.get("/capturas/01-ana.png")[1], "image/png")
+        self.assertEqual(s["linhas"][-1]["texto"], "Resumo: 1 de 2 conta(s) OK. Falhas: ana")
+        self.assertFalse(s["captura"])  # a captura geral (erro.png) é só da conta única
+
+    def test_captura_nao_permite_sair_da_pasta(self):
+        self.capturas.mkdir()
+        (self.capturas / "ok.png").write_bytes(b"png")
+        with self.assertRaises(HTTPError) as ctx:
+            self.get("/capturas/../config.json")
+        ctx.exception.close()
+        self.assertEqual(ctx.exception.code, 404)
+        self.assertEqual(servidor.nome_captura(3, "maria silva/ção"), "03-maria_silva_o.png")
+
+    def test_rotas_desconhecidas(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self.get("/nao-existe")
+        ctx.exception.close()
+        self.assertEqual(ctx.exception.code, 404)
+        self.assertEqual(self.post("/api/nada")[0], 404)
+
+
+if __name__ == "__main__":
+    unittest.main()
