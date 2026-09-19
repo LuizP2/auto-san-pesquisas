@@ -17,22 +17,25 @@ para Linux (`./setup/xxx.sh`):
 
 | Para quem | Windows | Linux | O que faz |
 | --- | --- | --- | --- |
-| **Staff** | `setup\staff.bat` | `./setup/staff.sh` | Prepara a máquina (instala o Python pelo `winget` se faltar, cria o `.venv`, instala o Playwright e baixa o Chromium), cria o atalho **Pesquisas Nave** na área de trabalho e abre a interface no navegador. Pode rodar de novo à vontade: só refaz o que faltar. |
-| **Frequentadores** | `setup\frequentador.bat` | `./setup/frequentador.sh` | Cria o atalho **Pesquisa Nave** na área de trabalho, que abre o site da pesquisa no navegador padrão para o aluno responder sozinho, e já abre o site. Não precisa de Python. |
+| **Staff** | `setup\staff.bat` | `./setup/staff.sh` | Prepara a máquina (instala o Python pelo `winget` se faltar, cria o `.venv`, instala o Playwright e baixa o Chromium), gera **`Pesquisas Nave.exe`** na pasta do projeto (Windows) e abre a interface no navegador. Pode rodar de novo à vontade: só refaz o que faltar. |
+| **Frequentadores** | `setup\frequentador.bat` | `./setup/frequentador.sh` | Cria o atalho **SAN - Pesquisa** na área de trabalho (logo oficial do SAN, `web/nave.ico`), que abre o site da pesquisa no navegador padrão para o aluno responder sozinho, e já abre o site. Não precisa de Python. |
 
 A lógica do de staff está em `setup/staff.py` (roda nos dois sistemas; os
-`.bat`/`.sh` só chamam ele). Opções: `--so-instalar` (não cria atalho nem
-abre), `--sem-atalho`, e qualquer outra vai para o servidor (`--porta 8080`,
-`--sem-abrir`). Depois da instalação, o atalho **Pesquisas Nave** (ou
-`iniciar.bat` / `iniciar.sh`) abre a interface direto.
+`.bat`/`.sh` só chamam ele). Opções: `--so-instalar` (só prepara o ambiente),
+`--sem-exe`, e qualquer outra vai para o servidor (`--porta 8080`,
+`--sem-abrir`). Depois da instalação, para abrir a interface: dois cliques em
+**`Pesquisas Nave.exe`** (Windows; é um lançador de ~10 MB gerado do
+`iniciar.py`, que usa o `.venv` ao lado — se ele não existir, roda o setup) ou
+`./iniciar.sh` (Linux). `iniciar.bat` faz o mesmo sem o `.exe`.
 
 Se algo falhar, o script diz exatamente qual comando falhou — copie a mensagem.
 
 ### Opcional: executável para Windows
 
 `construir_windows.bat` roda o setup acima e ainda gera
-`dist\PesquisasNave\PesquisasNave.exe` com o Chromium embutido (~550 MB) e um
-atalho para ele. Só vale a pena para levar o programa a uma máquina **sem**
+`dist\PesquisasNave\PesquisasNave.exe` com o Chromium embutido (~550 MB) —
+diferente do lançador `Pesquisas Nave.exe`, esse não depende de Python nem do
+`.venv`. Só vale a pena para levar o programa a uma máquina **sem**
 Python; o `.exe` não é assinado, então o SmartScreen pode perguntar na primeira
 vez. A receita está em `pesquisas.spec` e foi validada gerando o mesmo pacote
 no Linux.

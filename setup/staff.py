@@ -7,12 +7,13 @@ Faz, nesta ordem (pulando o que já estiver pronto):
   1. cria o ambiente Python do projeto (.venv);
   2. instala as dependências (Playwright);
   3. baixa o Chromium do Playwright (uma vez, ~150 MB);
-  4. cria o atalho "Pesquisas Nave" na área de trabalho;
+  4. no Windows, gera "Pesquisas Nave.exe" na raiz do projeto (lançador da
+     interface; no Linux o equivalente é o iniciar.sh);
   5. inicia o servidor local, que abre o navegador na interface.
 
-Opções: --so-instalar (para nos passos 1-3), --sem-atalho (não mexe na área
-de trabalho); outras opções (ex.: --porta 8080, --sem-abrir) vão para o
-servidor.py. Só usa a biblioteca padrão: roda com o Python do sistema.
+Opções: --so-instalar (para nos passos 1-3), --sem-exe (pula o passo 4);
+outras opções (ex.: --porta 8080, --sem-abrir) vão para o servidor.py. Só usa
+a biblioteca padrão: roda com o Python do sistema.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 VENV = RAIZ / ".venv"
 WINDOWS = os.name == "nt"
 PYTHON_VENV = VENV / ("Scripts/python.exe" if WINDOWS else "bin/python")
-NOME_ATALHO = "Pesquisas Nave"
+NOME_EXE = "Pesquisas Nave"
 
 
 class Falha(Exception):
@@ -94,56 +95,22 @@ def instalar_chromium() -> None:
             print(f"    sudo {PYTHON_VENV} -m playwright install-deps chromium")
 
 
-def area_de_trabalho() -> Path:
-    if WINDOWS:
-        saida = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "[Environment]::GetFolderPath('Desktop')"],
-            capture_output=True, text=True,
-        ).stdout.strip()
-        return Path(saida) if saida else Path.home() / "Desktop"
-    if shutil.which("xdg-user-dir"):
-        saida = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True).stdout.strip()
-        if saida and Path(saida).is_dir():
-            return Path(saida)
-    for nome in ("Área de trabalho", "Desktop"):
-        if (Path.home() / nome).is_dir():
-            return Path.home() / nome
-    return Path.home() / "Desktop"
-
-
-def criar_atalho() -> Path:
-    pasta = area_de_trabalho()
-    pasta.mkdir(parents=True, exist_ok=True)
-    if WINDOWS:
-        atalho = pasta / f"{NOME_ATALHO}.lnk"
-        alvo = RAIZ / "iniciar.bat"
-        icone = RAIZ / "web" / "icone.ico"
-        script = (
-            "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{atalho}'); "
-            "$s.TargetPath = '{alvo}'; $s.WorkingDirectory = '{pasta}'; "
-            "$s.IconLocation = '{icone},0'; $s.Description = 'Automação das pesquisas de satisfação'; $s.Save()"
-        ).format(atalho=str(atalho).replace("'", "''"), alvo=str(alvo).replace("'", "''"),
-                 pasta=str(RAIZ).replace("'", "''"), icone=str(icone).replace("'", "''"))
-        rodar(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
-        return atalho
-
-    atalho = pasta / "pesquisas-nave.desktop"
-    atalho.write_text(
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        f"Name={NOME_ATALHO}\n"
-        "Comment=Automação das pesquisas de satisfação (interface para a staff)\n"
-        f'Exec="{RAIZ / "iniciar.sh"}"\n'  # aspas: o caminho pode ter espaços
-        f"Path={RAIZ}\n"
-        f"Icon={RAIZ / 'web' / 'icone.png'}\n"
-        "Terminal=true\n"
-        "Categories=Education;\n",
-        encoding="utf-8",
-    )
-    atalho.chmod(0o755)
-    if shutil.which("gio"):  # GNOME: marca como confiável para abrir com dois cliques
-        subprocess.run(["gio", "set", str(atalho), "metadata::trusted", "true"], capture_output=True)
-    return atalho
+def gerar_exe() -> Path | None:
+    """Windows: empacota o iniciar.py num .exe com ícone, na raiz do projeto (PyInstaller)."""
+    if not WINDOWS:
+        return None
+    exe = RAIZ / f"{NOME_EXE}.exe"
+    fonte = RAIZ / "iniciar.py"
+    if exe.exists() and exe.stat().st_mtime >= fonte.stat().st_mtime:
+        print(f"  {exe.name} já existe.")
+        return exe
+    rodar([PYTHON_VENV, "-m", "pip", "install", "--disable-pip-version-check", "pyinstaller"])
+    rodar([
+        PYTHON_VENV, "-m", "PyInstaller", "--noconfirm", "--log-level", "WARN", "--onefile", "--console",
+        "--name", NOME_EXE, "--icon", RAIZ / "web" / "icone.ico",
+        "--distpath", RAIZ, "--workpath", RAIZ / "build", "--specpath", RAIZ / "build", fonte,
+    ], dica="Se o antivírus reclamou do PyInstaller, use iniciar.bat no lugar do .exe.")
+    return exe
 
 
 def iniciar_servidor(argumentos: list[str]) -> int:
@@ -157,7 +124,7 @@ def iniciar_servidor(argumentos: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Prepara a máquina da staff e abre a interface.")
     parser.add_argument("--so-instalar", action="store_true", help="só prepara o ambiente; não cria atalho nem inicia")
-    parser.add_argument("--sem-atalho", action="store_true", help="não cria o atalho na área de trabalho")
+    parser.add_argument("--sem-exe", action="store_true", help="não gera o Pesquisas Nave.exe (Windows)")
     args, para_o_servidor = parser.parse_known_args(argv)  # o resto (ex.: --porta 8080) vai para o servidor.py
 
     print(f"Pesquisas Nave — preparação da máquina (Python {sys.version.split()[0]}, pasta {RAIZ})")
@@ -171,11 +138,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.so_instalar:
             print("\nAmbiente pronto.")
             return 0
-        if args.sem_atalho:
-            passo(4, "Atalho na área de trabalho: pulado")
+        if not WINDOWS:
+            passo(4, "Lançador: no Linux use ./iniciar.sh (não há .exe)")
+        elif args.sem_exe:
+            passo(4, "Pesquisas Nave.exe: pulado")
         else:
-            passo(4, "Atalho na área de trabalho")
-            print(f"  Criado: {criar_atalho()}")
+            passo(4, "Pesquisas Nave.exe na pasta do projeto")
+            print(f"  Pronto: {gerar_exe()}")
         passo(5, "Iniciando o servidor (o navegador abre sozinho)")
         return iniciar_servidor(para_o_servidor)
     except Falha as e:

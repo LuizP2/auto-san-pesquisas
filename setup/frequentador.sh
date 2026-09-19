@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cria na área de trabalho o atalho "Pesquisa Nave" (abre o site da pesquisa de satisfação no
+# Cria na área de trabalho o atalho "SAN - Pesquisa" (abre o site da pesquisa de satisfação no
 # navegador padrão, para o frequentador responder sozinho) e já abre o site. Uso: ./setup/frequentador.sh [--sem-abrir]
 URL="https://pesquisas.navedoconhecimento.rio/"
 RAIZ="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,14 +13,14 @@ fi
 [ -n "$DESKTOP" ] || DESKTOP="$HOME/Desktop"
 mkdir -p "$DESKTOP"
 
-ATALHO="$DESKTOP/pesquisa-nave.desktop"
+ATALHO="$DESKTOP/san-pesquisa.desktop"
 cat > "$ATALHO" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Pesquisa Nave
+Name=SAN - Pesquisa
 Comment=Responder a pesquisa de satisfação da Nave do Conhecimento
 Exec=xdg-open $URL
-Icon=$RAIZ/web/icone.png
+Icon=$RAIZ/web/nave.png
 Terminal=false
 Categories=Education;
 EOF

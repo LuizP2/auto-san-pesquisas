@@ -1,13 +1,13 @@
 @echo off
 setlocal
-rem Cria na area de trabalho o atalho "Pesquisa Nave" (abre o site da pesquisa de satisfacao
+rem Cria na area de trabalho o atalho "SAN - Pesquisa" (abre o site da pesquisa de satisfacao
 rem no navegador padrao, para o frequentador responder sozinho) e ja abre o site.
 set "URL=https://pesquisas.navedoconhecimento.rio/"
 
 for /f "delims=" %%d in ('powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"') do set "DESKTOP=%%d"
 if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
-for %%i in ("%~dp0..\web\icone.ico") do set "ICONE=%%~fi"
-set "ATALHO=%DESKTOP%\Pesquisa Nave.url"
+for %%i in ("%~dp0..\web\nave.ico") do set "ICONE=%%~fi"
+set "ATALHO=%DESKTOP%\SAN - Pesquisa.url"
 
 > "%ATALHO%" echo [InternetShortcut]
 >> "%ATALHO%" echo URL=%URL%
