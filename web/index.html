@@ -115,12 +115,21 @@
   }
   .aviso.ok { background: rgba(38, 191, 191, .1); border-color: rgba(38, 191, 191, .5); color: var(--verde); }
 
+  h3 { font-size: 14px; font-weight: 700; margin: 0 0 6px; color: var(--texto); }
+  .subsecao { padding-top: 18px; margin-top: 18px; border-top: 1px dashed var(--borda); }
+  .subsecao:first-of-type { padding-top: 0; margin-top: 0; border-top: 0; }
+  .linha-import { display: grid; grid-template-columns: auto minmax(160px, 1fr); gap: 10px; margin-top: 12px; align-items: center; }
+  .linha-import select { width: auto; }
+  .linha-import button { grid-column: 1 / -1; justify-self: start; white-space: nowrap; }
+  @media (max-width: 560px) { .linha-import { grid-template-columns: 1fr; } }
+  .linha-select input[type=text] { width: 120px; }
   .tabela { margin-top: 16px; overflow: auto; border: 1px solid var(--borda); border-radius: 10px; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { padding: 8px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--borda); }
   th { color: var(--texto-2); font-weight: 600; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; background: var(--painel-2); }
   tr:last-child td { border-bottom: 0; }
   td.usuario { font-weight: 600; color: var(--verde); }
+  td.nome { color: var(--texto-2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
   td select { width: auto; padding: 5px 8px; border-radius: 8px; font-size: 13px; }
   td .remover { padding: 4px 10px; border-radius: 8px; background: transparent; color: var(--texto-2); border: 1px solid var(--borda); font-weight: 600; }
   td .remover:hover { color: var(--laranja); border-color: var(--laranja); }
@@ -141,6 +150,7 @@
   .log .ok .r { color: var(--verde); font-weight: 600; }
   .log .sucesso { color: var(--ciano); font-weight: 700; }
   .log .erro { color: var(--laranja); font-weight: 600; }
+  .log .pulada { color: var(--laranja-2); opacity: .8; }
   .log .info { color: var(--texto-2); }
   .log a { margin-left: 8px; font-weight: 600; }
 
@@ -193,17 +203,55 @@
 
     <section class="cartao">
       <h2>Várias contas</h2>
-      <p class="dica">Cole uma conta por linha no formato <code>usuário;senha</code>. Se quiser, acrescente as respostas de perfil na mesma linha:
-        <code>usuário;senha;Sexo;Rede municipal;Período;Faixa etária;Atividade</code> — o que faltar usa as respostas marcadas acima.
-        Também aceita colar direto de uma planilha (colunas separadas por Tab).</p>
-      <textarea id="lote" rows="4" spellcheck="false" placeholder="maria.silva;1234&#10;joao.souza;abcd;Masculino;Sim;Tarde;12 a 17 anos;Curso"></textarea>
-      <div class="botoes" style="margin-top:10px">
-        <button type="button" id="adicionar" class="secundario">Adicionar em massa</button>
-        <button type="button" id="limpar" class="terciario" hidden>Limpar lista</button>
+
+      <div class="subsecao">
+        <h3>Importar do SAN2</h3>
+        <p class="dica">Entra no SAN2 com o seu usuário de staff e puxa os matriculados de uma turma (ou um frequentador) com
+          sexo, faixa etária, período, atividade e rede municipal já deduzidos do cadastro. A senha de cada um é a padrão
+          da unidade (informe abaixo; fica salva só neste computador); quem tiver senha diferente é ignorado na execução.</p>
+        <div class="campos" style="margin-top:12px">
+          <label class="campo">Usuário do SAN2
+            <input type="text" id="san2Usuario" autocomplete="off">
+          </label>
+          <label class="campo">Senha do SAN2
+            <input type="password" id="san2Senha" autocomplete="off">
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="san2Guardar"> Guardar a senha do SAN2 neste computador</label>
+        <div class="linha-import">
+          <select id="san2Modo">
+            <option value="turma">Turma</option>
+            <option value="frequentador">Frequentador</option>
+          </select>
+          <input type="text" id="san2Termo" placeholder="código da turma, ex.: PDM.IKCC.P1.7" spellcheck="false">
+          <button type="button" id="san2Importar" class="secundario">Buscar e adicionar</button>
+        </div>
+        <label class="linha-select" style="margin-top:12px">Senha padrão dos frequentadores
+          <input type="text" id="senhaPadrao" placeholder="a que a unidade usa" spellcheck="false">
+        </label>
+        <p id="avisoSan2" class="aviso" hidden></p>
       </div>
-      <p id="avisoLote" class="aviso" hidden></p>
-      <div id="tabela" class="tabela" hidden></div>
-      <p id="notaContas" class="dica" style="margin-top:10px" hidden>A lista (com as senhas) fica salva em <code>contas.json</code> neste computador.</p>
+
+      <div class="subsecao">
+        <h3>Ou cole uma lista</h3>
+        <p class="dica">Uma conta por linha no formato <code>usuário;senha</code>. Se quiser, acrescente as respostas de perfil na mesma linha:
+          <code>usuário;senha;Sexo;Rede municipal;Período;Faixa etária;Atividade</code> — o que faltar usa as respostas marcadas acima.
+          Também aceita colar direto de uma planilha (colunas separadas por Tab).</p>
+        <textarea id="lote" rows="3" spellcheck="false" placeholder="maria.silva;1234&#10;joao.souza;abcd;Masculino;Sim;Tarde;12 a 17 anos;Curso"></textarea>
+        <div class="botoes" style="margin-top:10px">
+          <button type="button" id="adicionar" class="secundario">Adicionar em massa</button>
+        </div>
+        <p id="avisoLote" class="aviso" hidden></p>
+      </div>
+
+      <div class="subsecao" id="secaoLista" hidden>
+        <div class="cabecalho" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <h3 id="tituloLista" style="margin:0">Lista</h3>
+          <button type="button" id="limpar" class="terciario">Limpar lista</button>
+        </div>
+        <div id="tabela" class="tabela"></div>
+        <p id="notaContas" class="dica" style="margin-top:10px">A lista (com as senhas) fica salva em <code>contas.json</code> neste computador.</p>
+      </div>
     </section>
 
     <section class="cartao">
@@ -276,6 +324,12 @@
         </div>
       </fieldset>`).join('');
     $('#padrao').innerHTML = c.escala.map(o => `<option ${o === c.resposta_padrao ? 'selected' : ''}>${esc(o)}</option>`).join('');
+    $('#san2Usuario').value = c.san2_usuario || '';
+    if (c.san2_senha_salva) {
+      $('#san2Senha').placeholder = 'senha salva — deixe em branco para usá-la';
+      $('#san2Guardar').checked = true;
+    }
+    $('#senhaPadrao').value = c.senha_padrao || '';
     renderContas();
     acompanhar();  // retoma o registro se o servidor já estiver executando algo
   }
@@ -326,22 +380,53 @@
 
   function renderContas() {
     const tem = contas.length > 0;
-    $('#tabela').hidden = !tem;
-    $('#limpar').hidden = !tem;
-    $('#notaContas').hidden = !tem;
+    $('#secaoLista').hidden = !tem;
     $('#executarLista').hidden = !tem;
-    $('#executarLista').textContent = `Executar lista (${contas.length} conta${contas.length === 1 ? '' : 's'})`;
+    const rotulo = `${contas.length} conta${contas.length === 1 ? '' : 's'}`;
+    $('#executarLista').textContent = `Executar lista (${rotulo})`;
+    $('#tituloLista').textContent = `Lista (${rotulo})`;
     if (!tem) { $('#tabela').innerHTML = ''; return; }
-    const cabecalho = ['Usuário', ...perguntas.map((p, i) => CURTOS[i] || p.texto), ''];
+    const temNome = contas.some(c => c.nome);
+    const cabecalho = ['Usuário', ...(temNome ? ['Nome'] : []), ...perguntas.map((p, i) => CURTOS[i] || p.texto), ''];
     $('#tabela').innerHTML = `<table>
       <thead><tr>${cabecalho.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
       <tbody>${contas.map((c, i) => `<tr>
         <td class="usuario">${esc(c.usuario)}</td>
+        ${temNome ? `<td class="nome" title="${esc(c.nome || '')}">${esc(c.nome || '')}</td>` : ''}
         ${perguntas.map(p => `<td><select data-i="${i}" data-p="${esc(p.texto)}">${p.opcoes.map(o => `<option ${c.respostas[p.texto] === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></td>`).join('')}
         <td><button type="button" class="remover" data-i="${i}" title="Remover">✕</button></td>
       </tr>`).join('')}</tbody>
     </table>`;
   }
+
+  $('#san2Modo').addEventListener('change', () => {
+    $('#san2Termo').placeholder = $('#san2Modo').value === 'turma' ? 'código da turma, ex.: PDM.IKCC.P1.7' : 'login ou nome do frequentador';
+  });
+
+  $('#san2Importar').addEventListener('click', async () => {
+    esconderAviso($('#avisoSan2'));
+    const botao = $('#san2Importar');
+    botao.disabled = true;
+    botao.textContent = 'Entrando no SAN2 e buscando…';
+    try {
+      const r = await postar('/api/san2/importar', {
+        san2_usuario: $('#san2Usuario').value.trim(), san2_senha: $('#san2Senha').value, guardar_san2: $('#san2Guardar').checked,
+        modo: $('#san2Modo').value, termo: $('#san2Termo').value.trim(), senha_padrao: $('#senhaPadrao').value.trim(),
+        respostas_padrao: respostasMarcadas(),
+      });
+      if (!r.ok) { mostrarAviso($('#avisoSan2'), r.erro); return; }
+      contas = r.contas;
+      renderContas();
+      const partes = [];
+      if (r.turma) partes.push(`Turma ${r.turma.codigo} — ${r.turma.curso} (${r.turma.carga_horaria} h)${r.turma.tem_pesquisa === false ? ' — atenção: sem pesquisa de satisfação configurada' : ''}.`);
+      partes.push(`${r.adicionadas} conta${r.adicionadas === 1 ? '' : 's'} adicionada${r.adicionadas === 1 ? '' : 's'}${r.atualizadas ? `, ${r.atualizadas} atualizada${r.atualizadas === 1 ? '' : 's'}` : ''}.`);
+      mostrarAviso($('#avisoSan2'), partes.join(' '), true);
+      $('#san2Termo').value = '';
+    } finally {
+      botao.disabled = false;
+      botao.textContent = 'Buscar e adicionar';
+    }
+  });
 
   $('#tabela').addEventListener('change', async ev => {
     const sel = ev.target.closest('select[data-i]');
@@ -482,7 +567,10 @@
     log.querySelector('.vazio')?.remove();
     const el = document.createElement('div');
     const t = l.texto.trim();
-    if (l.nivel === 'error' || t.startsWith('❌')) {
+    if (t.startsWith('⏭')) {
+      el.className = 'linha pulada';
+      el.textContent = t;
+    } else if (l.nivel === 'error' || t.startsWith('❌')) {
       el.className = 'linha erro';
       el.textContent = t;
     } else if (t.startsWith('✔') && t.includes(' → ')) {

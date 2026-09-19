@@ -18,6 +18,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pesquisa  # noqa: E402
+import san2  # noqa: E402
 import servidor  # noqa: E402
 
 RESPOSTAS = {
@@ -137,6 +138,9 @@ class TesteServidor(unittest.TestCase):
         self.assertEqual([p["texto"] for p in c["perguntas"]], [p for p, _ in pesquisa.PERGUNTAS_PERFIL])
         self.assertEqual(c["resposta_padrao"], "Muito Satisfeito")
         self.assertEqual(c["contas"], [])
+        self.assertEqual(c["san2_usuario"], "")
+        self.assertFalse(c["san2_senha_salva"])
+        self.assertEqual(c["senha_padrao"], "")
 
     def test_validacao(self):
         self.assertEqual(self.post("/api/executar", self.pedido(usuario=""))[1]["erro"], "Informe o usuário.")
@@ -282,25 +286,123 @@ class TesteServidor(unittest.TestCase):
         textos = [l["texto"] for l in s["linhas"]]
         self.assertEqual(textos[0], "Conta 1/2: ana")
         self.assertEqual(textos[2], "Conta 2/2: bia")
-        self.assertEqual(textos[-1], "Resumo: 2 conta(s) concluída(s) sem erros.")
+        self.assertEqual(textos[-1], "Resumo: 2 de 2 conta(s) OK.")
 
     def test_lote_continua_apos_falha_e_gera_captura_por_conta(self):
         self.post("/api/contas", {"contas": self.contas_exemplo()})
 
         def executar_falso(pagina, config, senha, enviar=True):
             if config["usuario"] == "ana":
-                raise pesquisa.ErroAutomacao("Login falhou: credenciais incorretas")
+                raise pesquisa.ErroAutomacao('A resposta "Muito Satisfeito" não existe na pergunta "X".')
             return 1
 
         with mock.patch.object(pesquisa, "executar", executar_falso):
             self.post("/api/executar-lote", {"headless": False})
             s = self.esperar_estado("erro")
 
-        erro = next(l for l in s["linhas"] if l["nivel"] == "error" and "Login falhou" in l["texto"])
+        erro = next(l for l in s["linhas"] if l["nivel"] == "error" and "não existe" in l["texto"])
         self.assertEqual(erro["captura"], "01-ana.png")
         self.assertEqual(self.get("/capturas/01-ana.png")[1], "image/png")
-        self.assertEqual(s["linhas"][-1]["texto"], "Resumo: 1 de 2 conta(s) OK. Falhas: ana")
+        self.assertEqual(s["linhas"][-1]["texto"], "Resumo: 1 de 2 conta(s) OK. 1 com erro: ana.")
         self.assertFalse(s["captura"])  # a captura geral (erro.png) é só da conta única
+
+    def test_lote_ignora_senha_diferente_da_padrao(self):
+        self.post("/api/contas", {"contas": self.contas_exemplo()})
+
+        def executar_falso(pagina, config, senha, enviar=True):
+            if config["usuario"] == "ana":
+                raise pesquisa.ErroAutomacao("Login falhou: As credenciais estão incorretas.")
+            return 1
+
+        with mock.patch.object(pesquisa, "executar", executar_falso):
+            self.post("/api/executar-lote", {})
+            s = self.esperar_estado("concluido")  # ignorar não é erro
+        textos = [l["texto"] for l in s["linhas"]]
+        self.assertIn("⏭ Ignorada — o site recusou o login (senha diferente da padrão?)", textos)
+        self.assertEqual(textos[-1], "Resumo: 1 de 2 conta(s) OK. 1 ignorada(s) por senha diferente: ana.")
+        self.assertFalse(any(l.get("captura") for l in s["linhas"]))
+
+    # -- importação do SAN2 -------------------------------------------------
+
+    def importacao_falsa(self, resultado):
+        """Substitui o login/consulta do SAN2 por um resultado pronto."""
+        sessao = mock.Mock()
+        sessao.cliente.return_value = "cliente-falso"
+        p1 = mock.patch.object(servidor, "SESSAO_SAN2", sessao)
+        p2 = mock.patch.object(san2, "importar_turma", lambda cliente, termo, senha: resultado)
+        p3 = mock.patch.object(san2, "importar_frequentador", lambda cliente, termo, senha: resultado)
+        for p in (p1, p2, p3):
+            p.start()
+            self.addCleanup(p.stop)
+        return sessao
+
+    def test_importar_do_san2_valida_e_salva_credenciais(self):
+        r = self.post("/api/san2/importar", {"termo": "PDM.X", "san2_senha": "s"})[1]
+        self.assertEqual(r["erro"], "Informe o usuário do SAN2.")
+        r = self.post("/api/san2/importar", {"san2_usuario": "staff", "san2_senha": "s"})[1]
+        self.assertIn("código da turma", r["erro"])
+        r = self.post("/api/san2/importar", {"san2_usuario": "staff", "termo": "PDM.X"})[1]
+        self.assertEqual(r["erro"], "Informe a senha do SAN2.")
+        r = self.post("/api/san2/importar", {"san2_usuario": "staff", "san2_senha": "s", "termo": "PDM.X"})[1]
+        self.assertEqual(r["erro"], "Informe a senha padrão dos frequentadores.")
+
+        sessao = self.importacao_falsa({"turma": None, "contas": []})
+        status, r = self.post("/api/san2/importar", {
+            "san2_usuario": "staff", "san2_senha": "segredo", "guardar_san2": True, "modo": "frequentador",
+            "termo": "alguem", "senha_padrao": "654321",
+        })
+        self.assertEqual(status, 200)
+        sessao.cliente.assert_called_once_with("staff", "segredo")
+        salvo = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual((salvo["san2_usuario"], salvo["san2_senha"], salvo["senha_padrao"]), ("staff", "segredo", "654321"))
+        publico = json.loads(self.get("/api/config")[2])
+        self.assertTrue(publico["san2_senha_salva"])
+
+        # senha em branco reaproveita a salva
+        status, r = self.post("/api/san2/importar", {"san2_usuario": "staff", "termo": "x", "guardar_san2": False})
+        self.assertEqual(status, 200)
+        self.assertEqual(sessao.cliente.call_args.args, ("staff", "segredo"))
+        self.assertNotIn("san2_senha", json.loads(self.config.read_text(encoding="utf-8")))
+
+    def test_importar_do_san2_mescla_na_lista(self):
+        self.post("/api/contas", {"contas": self.contas_exemplo()})  # ana, bia já existem
+        self.importacao_falsa({
+            "turma": {"id": 1, "codigo": "PDM.X.1", "curso": "Curso X", "carga_horaria": 3, "tem_pesquisa": True},
+            "contas": [
+                {"usuario": "ana", "senha": "senha-padrao-x", "nome": "ANA", "respostas": {**RESPOSTAS, "Sexo": "Masculino"}},
+                {"usuario": "carlos", "senha": "senha-padrao-x", "nome": "CARLOS", "respostas": {"Sexo": "Masculino"}},  # resto vem do padrão
+            ],
+        })
+        status, r = self.post("/api/san2/importar", {
+            "san2_usuario": "staff", "san2_senha": "s", "termo": "PDM.X.1", "modo": "turma", "respostas_padrao": RESPOSTAS,
+            "senha_padrao": "p",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual((r["adicionadas"], r["atualizadas"]), (1, 1))
+        self.assertEqual(r["turma"]["codigo"], "PDM.X.1")
+        self.assertEqual([c["usuario"] for c in r["contas"]], ["ana", "bia", "carlos"])
+        self.assertEqual([c["senha"] for c in r["contas"]], ["", "", ""])  # sem senhas na resposta
+
+        salvo = {c["usuario"]: c for c in json.loads(self.contas.read_text(encoding="utf-8"))["contas"]}
+        self.assertEqual(salvo["ana"]["senha"], "a1")  # senha salva mantida
+        self.assertEqual(salvo["ana"]["respostas"]["Sexo"], "Masculino")
+        self.assertEqual(salvo["ana"]["nome"], "ANA")
+        self.assertEqual(salvo["carlos"]["senha"], "senha-padrao-x")
+        self.assertEqual(salvo["carlos"]["respostas"], {**RESPOSTAS, "Sexo": "Masculino"})
+
+    def test_importar_do_san2_sem_padrao_para_o_que_falta(self):
+        self.importacao_falsa({"turma": None, "contas": [{"usuario": "x", "senha": "1", "nome": "", "respostas": {"Sexo": "Feminino"}}]})
+        status, r = self.post("/api/san2/importar", {"san2_usuario": "staff", "san2_senha": "s", "termo": "x", "respostas_padrao": {}, "senha_padrao": "p"})
+        self.assertEqual(status, 400)
+        self.assertIn("Não consegui deduzir", r["erro"])
+        self.assertFalse(self.contas.exists())
+
+    def test_importar_do_san2_erro_do_san2_vira_400(self):
+        sessao = mock.Mock()
+        sessao.cliente.side_effect = san2.ErroSan2("Login no SAN2 recusado: senha inválida")
+        with mock.patch.object(servidor, "SESSAO_SAN2", sessao):
+            status, r = self.post("/api/san2/importar", {"san2_usuario": "staff", "san2_senha": "s", "termo": "x", "senha_padrao": "p"})
+        self.assertEqual((status, r["erro"]), (400, "Login no SAN2 recusado: senha inválida"))
 
     def test_captura_nao_permite_sair_da_pasta(self):
         self.capturas.mkdir()

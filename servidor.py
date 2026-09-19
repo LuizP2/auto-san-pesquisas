@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pesquisa  # também garante o .venv (re-executa este script com o Python certo)
+import san2
 
 PAGINA = pesquisa.RECURSOS / "web" / "index.html"
 CONTAS = pesquisa.PASTA / "contas.json"
@@ -31,6 +32,7 @@ CAPTURAS = pesquisa.PASTA / "capturas"
 ESCALA = ["Muito Satisfeito", "Satisfeito", "Indiferente", "Insatisfeito", "Muito Insatisfeito"]
 TEMPO_MAX_AGUARDANDO = 30 * 60  # segundos com o navegador aberto esperando o usuário
 log = pesquisa.log
+SESSAO_SAN2 = san2.Sessao()
 
 
 class RequisicaoInvalida(Exception):
@@ -127,6 +129,7 @@ class Execucao:
 
     def _rodar_lote(self, contas: list[dict], enviar: bool, headless: bool) -> None:
         falhas: list[str] = []
+        ignoradas: list[str] = []
         try:
             with pesquisa.sync_playwright() as pw:
                 navegador = pesquisa.abrir_navegador(pw, headless)
@@ -136,12 +139,17 @@ class Execucao:
                     pagina = contexto.new_page()
                     try:
                         pesquisa.executar(pagina, conta["config"], conta["senha"], enviar=enviar)
-                    except (pesquisa.ErroAutomacao, pesquisa.ErroPlaywright) as e:
+                    except pesquisa.ErroAutomacao as e:
+                        if str(e).startswith("Login falhou"):
+                            # senha diferente da padrão: a pessoa é pulada, sem alarde
+                            ignoradas.append(conta["usuario"])
+                            log.warning("⏭ Ignorada — o site recusou o login (senha diferente da padrão?)")
+                        else:
+                            falhas.append(conta["usuario"])
+                            self._registrar_falha(pagina, i, conta["usuario"], str(e))
+                    except pesquisa.ErroPlaywright as e:
                         falhas.append(conta["usuario"])
-                        mensagem = e if isinstance(e, pesquisa.ErroAutomacao) else e.message.splitlines()[0]
-                        arquivo = nome_captura(i, conta["usuario"])
-                        salvou = pesquisa.salvar_captura(pagina, CAPTURAS / arquivo, avisar=False)
-                        log.error("❌ %s", mensagem, extra={"captura": arquivo if salvou else None})
+                        self._registrar_falha(pagina, i, conta["usuario"], e.message.splitlines()[0])
                     finally:
                         contexto.close()
                 navegador.close()
@@ -149,12 +157,19 @@ class Execucao:
             log.exception("❌ Falha inesperada")
             self._terminar("erro")
             return
-        ok = len(contas) - len(falhas)
+        ok = len(contas) - len(falhas) - len(ignoradas)
+        partes = [f"{ok} de {len(contas)} conta(s) OK"]
+        if ignoradas:
+            partes.append(f"{len(ignoradas)} ignorada(s) por senha diferente: {', '.join(ignoradas)}")
         if falhas:
-            log.error("Resumo: %d de %d conta(s) OK. Falhas: %s", ok, len(contas), ", ".join(falhas))
-        else:
-            log.info("Resumo: %d conta(s) concluída(s) sem erros.", ok)
+            partes.append(f"{len(falhas)} com erro: {', '.join(falhas)}")
+        (log.error if falhas else log.info)("Resumo: " + ". ".join(partes) + ".")
         self._terminar("erro" if falhas else "concluido")
+
+    def _registrar_falha(self, pagina, indice: int, usuario: str, mensagem: str) -> None:
+        arquivo = nome_captura(indice, usuario)
+        salvou = pesquisa.salvar_captura(pagina, CAPTURAS / arquivo, avisar=False)
+        log.error("❌ %s", mensagem, extra={"captura": arquivo if salvou else None})
 
     def _aguardar(self, mensagem: str) -> None:
         log.info(mensagem)
@@ -204,8 +219,15 @@ def config_publica() -> dict:
         },
         "escala": ESCALA,
         "resposta_padrao": config.get("resposta_padrao") or pesquisa.RESPOSTA_PADRAO,
-        "contas": [{**c, "senha": ""} for c in carregar_contas()],  # senhas nunca voltam à página
+        "contas": contas_publicas(),
+        "san2_usuario": config.get("san2_usuario", ""),
+        "san2_senha_salva": bool(config.get("san2_senha")),
+        "senha_padrao": config.get("senha_padrao") or "",
     }
+
+
+def contas_publicas() -> list[dict]:
+    return [{**c, "senha": ""} for c in carregar_contas()]  # senhas nunca voltam à página
 
 
 def carregar_contas() -> list[dict]:
@@ -245,9 +267,80 @@ def validar_contas(dados: dict) -> list[dict]:
         contas.append({
             "usuario": usuario,
             "senha": senha,
+            "nome": str(item.get("nome") or salvas.get(usuario, {}).get("nome") or ""),
             "respostas": validar_respostas(item.get("respostas") or {}),
         })
     return contas
+
+
+def mesclar_contas(existentes: list[dict], novas: list[dict], padrao: dict) -> tuple[list[dict], int, int]:
+    """Junta as contas importadas às salvas: mesmo usuário atualiza respostas/nome e
+    mantém a senha salva; o que a importação não deduziu vem de `padrao`."""
+    por_usuario = {c["usuario"]: c for c in existentes}
+    adicionadas = atualizadas = 0
+    for nova in novas:
+        respostas = {**padrao, **nova["respostas"]}
+        faltando = [p for p, _ in pesquisa.PERGUNTAS_PERFIL if not respostas.get(p)]
+        if faltando:
+            raise RequisicaoInvalida(
+                f'Não consegui deduzir "{faltando[0]}" para {nova["usuario"]}; marque uma resposta padrão no formulário.'
+            )
+        atual = por_usuario.get(nova["usuario"])
+        if atual:
+            atual["respostas"] = respostas
+            atual["nome"] = nova.get("nome") or atual.get("nome", "")
+            atualizadas += 1
+        else:
+            por_usuario[nova["usuario"]] = {"usuario": nova["usuario"], "senha": nova["senha"], "nome": nova.get("nome", ""), "respostas": respostas}
+            adicionadas += 1
+    return list(por_usuario.values()), adicionadas, atualizadas
+
+
+def importar_do_san2(dados: dict) -> dict:
+    """Login no SAN2 (token fica em memória) + importação de turma ou frequentador para a lista."""
+    usuario = str(dados.get("san2_usuario") or "").strip()
+    if not usuario:
+        raise RequisicaoInvalida("Informe o usuário do SAN2.")
+    termo = str(dados.get("termo") or "").strip()
+    if not termo:
+        raise RequisicaoInvalida("Informe o código da turma ou o login/nome do frequentador.")
+    modo = dados.get("modo") or "turma"
+    if modo not in ("turma", "frequentador"):
+        raise RequisicaoInvalida("Modo inválido.")
+
+    config = pesquisa.carregar_config(pesquisa.CONFIG_PADRAO) or {}
+    senha = str(dados.get("san2_senha") or "") or config.get("san2_senha") or ""
+    if not senha:
+        raise RequisicaoInvalida("Informe a senha do SAN2.")
+    senha_padrao = str(dados.get("senha_padrao") or "").strip() or str(config.get("senha_padrao") or "")
+    if not senha_padrao:
+        raise RequisicaoInvalida("Informe a senha padrão dos frequentadores.")
+
+    config["san2_usuario"] = usuario
+    config["senha_padrao"] = senha_padrao
+    if dados.get("guardar_san2"):
+        config["san2_senha"] = senha
+    else:
+        config.pop("san2_senha", None)
+    pesquisa.salvar_config(pesquisa.CONFIG_PADRAO, config)
+
+    try:
+        cliente = SESSAO_SAN2.cliente(usuario, senha)
+        importar = san2.importar_turma if modo == "turma" else san2.importar_frequentador
+        resultado = importar(cliente, termo, senha_padrao)
+    except san2.ErroSan2 as e:
+        raise RequisicaoInvalida(str(e)) from None
+
+    padrao = {p: r for p, r in (dados.get("respostas_padrao") or {}).items() if r}
+    contas, adicionadas, atualizadas = mesclar_contas(carregar_contas(), resultado["contas"], padrao)
+    salvar_contas(contas)
+    return {
+        "ok": True,
+        "turma": resultado.get("turma"),
+        "adicionadas": adicionadas,
+        "atualizadas": atualizadas,
+        "contas": contas_publicas(),
+    }
 
 
 def validar_pedido(dados: dict) -> tuple[dict, str, bool, bool]:
@@ -338,6 +431,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 contas = validar_contas(self._ler_json())
                 salvar_contas(contas)
                 self._json({"ok": True, "contas": len(contas)})
+            elif rota.path == "/api/san2/importar":
+                self._json(importar_do_san2(self._ler_json()))
             elif rota.path == "/api/fechar":
                 EXECUCAO.pedir_fechamento()
                 self._json({"ok": True})

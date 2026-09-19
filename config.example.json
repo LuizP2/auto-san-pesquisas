@@ -8,5 +8,8 @@
     "Qual a sua faixa etária?": "18 a 60 anos",
     "Qual atividade você realizou?": "Curso"
   },
-  "resposta_padrao": "Muito Satisfeito"
+  "resposta_padrao": "Muito Satisfeito",
+  "san2_usuario": "seu.usuario.de.staff",
+  "san2_senha": "opcional — apague esta linha para digitar na página",
+  "senha_padrao": "a senha padrão dos frequentadores da sua unidade"
 }

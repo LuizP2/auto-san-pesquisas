@@ -49,8 +49,19 @@ Abre <http://127.0.0.1:8765/> no navegador. Na página:
 - **Respostas de perfil** — as 5 perguntas; valem para a conta acima e como
   padrão para a lista de contas.
 - **Demais perguntas** — o que todas as outras perguntas recebem.
-- **Várias contas** — cole uma conta por linha (`usuário;senha`) e clique em
-  **Adicionar em massa**. Na mesma linha você pode informar as respostas de
+- **Várias contas → Importar do SAN2** — informe seu usuário/senha de staff do
+  SAN2, escolha **Turma** (código, ex. `PDM.IKCC.P1.7`) ou **Frequentador**
+  (login ou nome) e clique em **Buscar e adicionar**. O programa entra no SAN2
+  (navegador invisível, token guardado em memória por 8 h), puxa os
+  matriculados e deduz as 5 respostas do cadastro: sexo, faixa etária (data
+  de nascimento), período (horário das aulas), atividade (carga horária ≤ 6 h
+  = oficina) e rede municipal (tipo da instituição de ensino). A senha de cada
+  conta é a **senha padrão** que a unidade usa (você informa uma vez na página;
+  fica só no seu `config.json`); na execução, quem tiver senha diferente é
+  **ignorado** e o resumo diz quem foi. As regras estão em
+  `docs/san2-fluxo.md`.
+- **Várias contas → Ou cole uma lista** — uma conta por linha (`usuário;senha`)
+  e **Adicionar em massa**. Na mesma linha você pode informar as respostas de
   perfil daquela pessoa: `usuário;senha;Sexo;Rede municipal;Período;Faixa
   etária;Atividade` (aceita abreviações, sem acento, e colunas separadas por
   Tab — dá para colar direto de uma planilha). O que faltar usa as respostas
@@ -104,10 +115,19 @@ diferente da padrão a qualquer outra pergunta, acrescente-a ali:
 Se alguma pergunta pedir justificativa ou for discursiva, o script avisa e
 para; defina `"justificativa"` ou acrescente a pergunta em `respostas`.
 
+## Monitor de rede
+
+`python3 monitor.py` abre um navegador que registra toda requisição que os
+sites fazem (método, URL, corpo enviado com senhas mascaradas, resposta) em
+`monitor/<data-hora>/requisicoes.jsonl`, com resumo dos endpoints ao fechar.
+Foi assim que o fluxo do SAN2 foi mapeado.
+
 ## Testes
 
 `teste_mock.py` usa o frontend real do site com a API simulada (nada é enviado
-de verdade); `teste_servidor.py` testa a interface web com a automação simulada:
+de verdade); `teste_servidor.py` testa a interface web com a automação
+simulada; `teste_san2.py` cobre as regras de dedução; `teste_monitor.py` o
+monitor:
 
 ```bash
 .venv/bin/python -m unittest discover -s testes -p "teste_*.py" -v
