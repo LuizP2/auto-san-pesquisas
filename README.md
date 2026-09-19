@@ -10,32 +10,32 @@ responde as pesquisas de satisfação pendentes.
 - Se houver mais de uma pesquisa pendente, todas são respondidas em sequência.
 - Dá para cadastrar **várias contas** e responder todas de uma vez.
 
-Há três jeitos de usar: o executável para Windows (atalho na área de trabalho),
-a interface web pelo Python, ou a linha de comando.
+## Instalação: pasta `setup/`
 
-## Windows 11: executável + atalho na área de trabalho
+Dois scripts, cada um com uma versão para Windows (dois cliques no `.bat`) e
+para Linux (`./setup/xxx.sh`):
 
-Requisito: Python 3.10+ instalado (<https://www.python.org/downloads/>, marque
-"Add python.exe to PATH"). Depois, na pasta do projeto, dê **dois cliques em
-`construir_windows.bat`**. Ele:
+| Para quem | Windows | Linux | O que faz |
+| --- | --- | --- | --- |
+| **Staff** | `setup\staff.bat` | `./setup/staff.sh` | Prepara a máquina (instala o Python pelo `winget` se faltar, cria o `.venv`, instala o Playwright e baixa o Chromium), cria o atalho **Pesquisas Nave** na área de trabalho e abre a interface no navegador. Pode rodar de novo à vontade: só refaz o que faltar. |
+| **Frequentadores** | `setup\frequentador.bat` | `./setup/frequentador.sh` | Cria o atalho **Pesquisa Nave** na área de trabalho, que abre o site da pesquisa no navegador padrão para o aluno responder sozinho, e já abre o site. Não precisa de Python. |
 
-1. cria o ambiente Python (`.venv`) e instala `playwright` + `pyinstaller`;
-2. baixa o Chromium para **dentro** do pacote (fica embutido no programa);
-3. gera `dist\PesquisasNave\PesquisasNave.exe` (~550 MB por causa do Chromium);
-4. cria o atalho **Pesquisas Nave** na área de trabalho, com ícone.
+A lógica do de staff está em `setup/staff.py` (roda nos dois sistemas; os
+`.bat`/`.sh` só chamam ele). Opções: `--so-instalar` (não cria atalho nem
+abre), `--sem-atalho`, e qualquer outra vai para o servidor (`--porta 8080`,
+`--sem-abrir`). Depois da instalação, o atalho **Pesquisas Nave** (ou
+`iniciar.bat` / `iniciar.sh`) abre a interface direto.
 
-O atalho abre uma janela de console (o registro aparece nela) e a interface no
-navegador. Fechar a janela encerra o programa. `config.json`, `contas.json` e
-as capturas ficam na mesma pasta do `.exe`.
+Se algo falhar, o script diz exatamente qual comando falhou — copie a mensagem.
 
-Observações:
+### Opcional: executável para Windows
 
-- O `.exe` não é assinado, então o SmartScreen pode perguntar na primeira vez
-  ("Mais informações" → "Executar assim mesmo").
-- Se preferir não compilar, `iniciar.bat` faz o mesmo rodando direto pelo Python
-  (prepara o ambiente na primeira vez). Um atalho para ele também funciona.
-- A receita do PyInstaller está em `pesquisas.spec`; ela foi validada gerando o
-  mesmo pacote no Linux.
+`construir_windows.bat` roda o setup acima e ainda gera
+`dist\PesquisasNave\PesquisasNave.exe` com o Chromium embutido (~550 MB) e um
+atalho para ele. Só vale a pena para levar o programa a uma máquina **sem**
+Python; o `.exe` não é assinado, então o SmartScreen pode perguntar na primeira
+vez. A receita está em `pesquisas.spec` e foi validada gerando o mesmo pacote
+no Linux.
 
 ## Interface web (Linux/macOS/Windows)
 
@@ -91,11 +91,13 @@ variável `SAN_SENHA`). Opções: `--configurar`, `--sem-enviar`, `--headless`,
 `--config ARQ`. Se algo der errado, salva `erro.png`, mostra o motivo e deixa o
 navegador aberto para você terminar à mão.
 
-## Instalação manual (Linux/macOS)
+## Instalação manual
+
+Equivale ao `setup/staff.py --so-instalar`:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt      # Windows: .venv\Scripts\pip
 .venv/bin/playwright install chromium
 ```
 

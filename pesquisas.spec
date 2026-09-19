@@ -1,17 +1,40 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Receita do PyInstaller para o executável da interface web.
 
-Antes de rodar, instale o Chromium DENTRO do pacote do Playwright para ele
-ir junto no executável:
+Requisitos (construir_windows.bat faz tudo): o .venv com o Playwright e o
+Chromium instalado no lugar padrão (`playwright install chromium`). O Chromium
+é copiado do cache padrão para dentro do pacote, em ms-playwright/.
 
-    PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium
-
-Depois:  pyinstaller --noconfirm pesquisas.spec  ->  dist/PesquisasNave/
-(construir_windows.bat faz tudo isso no Windows.)
+    pyinstaller --noconfirm pesquisas.spec  ->  dist/PesquisasNave/
 """
 
-# O próprio Playwright traz um hook do PyInstaller que recolhe o pacote inteiro
-# (driver node + JS + o Chromium instalado em .local-browsers).
+import json
+import os
+import sys
+from pathlib import Path
+
+import playwright
+
+
+def cache_playwright() -> Path:
+    """Onde `playwright install` guarda os navegadores."""
+    definido = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if definido and definido != "0":
+        return Path(definido)
+    if sys.platform == "win32":
+        return Path(os.environ["LOCALAPPDATA"]) / "ms-playwright"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "ms-playwright"
+
+
+pacote = Path(playwright.__file__).parent / "driver" / "package"
+revisao = next(b["revision"] for b in json.loads((pacote / "browsers.json").read_text())["browsers"] if b["name"] == "chromium")
+chromium = cache_playwright() / f"chromium-{revisao}"
+if not chromium.is_dir():
+    raise SystemExit(f"Chromium {revisao} não encontrado em {chromium}. Rode: python -m playwright install chromium")
+print(f"Embutindo {chromium}")
+
 a = Analysis(
     ["servidor.py"],
     pathex=["."],
@@ -22,10 +45,8 @@ a = Analysis(
 
 
 def dispensavel(caminho: str) -> bool:
-    # O Chromium completo também roda invisível (abrir_navegador usa channel="chromium"),
-    # então o "headless shell" e o ffmpeg (gravação de vídeo) só ocupariam espaço.
-    nome = caminho.replace("\\", "/")
-    return "chromium_headless_shell-" in nome or "/ffmpeg-" in nome
+    # Se alguém instalou navegadores dentro do pacote (PLAYWRIGHT_BROWSERS_PATH=0), não duplicar.
+    return ".local-browsers" in caminho.replace("\\", "/")
 
 
 a.datas = [d for d in a.datas if not dispensavel(d[0])]
@@ -43,4 +64,8 @@ exe = EXE(
     console=True,  # a janela mostra o registro; fechar a janela encerra o servidor
     upx=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, name="PesquisasNave")
+coll = COLLECT(
+    exe, a.binaries, a.datas,
+    Tree(str(chromium), prefix=f"ms-playwright/chromium-{revisao}"),
+    name="PesquisasNave",
+)

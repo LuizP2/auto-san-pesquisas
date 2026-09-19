@@ -36,8 +36,8 @@ PYTHON_VENV = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 def garantir_ambiente() -> None:
     """Se rodou com o Python do sistema, troca para o do .venv (onde está o Playwright)."""
     if EMPACOTADO:
-        # Chromium embutido no pacote (instalado com PLAYWRIGHT_BROWSERS_PATH=0 na hora do build).
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+        # Chromium copiado para dentro do pacote pelo pesquisas.spec.
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(RECURSOS / "ms-playwright")
         return
     try:
         import playwright  # noqa: F401

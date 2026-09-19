@@ -8,28 +8,17 @@ echo  Pesquisas Nave - gerar o executavel
 echo ==========================================
 echo.
 
-where py >nul 2>nul
-if %errorlevel%==0 (set "PY=py -3") else (set "PY=python")
+echo [1/3] Ambiente Python + Playwright + Chromium (setup\staff.bat) ...
+call "%~dp0setup\staff.bat" --so-instalar || goto :erro
 set "VPY=.venv\Scripts\python.exe"
 
-if not exist "%VPY%" (
-    echo [1/5] Criando o ambiente Python em .venv ...
-    %PY% -m venv .venv || goto :erro
-) else (
-    echo [1/5] Ambiente .venv ja existe.
-)
-
-echo [2/5] Instalando dependencias (playwright, pyinstaller) ...
-"%VPY%" -m pip install --upgrade pip playwright pyinstaller || goto :erro
-
-echo [3/5] Baixando o Chromium para dentro do pacote (~150 MB, so na primeira vez) ...
-set PLAYWRIGHT_BROWSERS_PATH=0
-"%VPY%" -m playwright install chromium || goto :erro
-
-echo [4/5] Gerando dist\PesquisasNave\PesquisasNave.exe (leva alguns minutos) ...
+echo.
+echo [2/3] Gerando dist\PesquisasNave\PesquisasNave.exe (leva alguns minutos) ...
+"%VPY%" -m pip install --disable-pip-version-check pyinstaller || goto :erro
 "%VPY%" -m PyInstaller --noconfirm --log-level WARN pesquisas.spec || goto :erro
 
-echo [5/5] Criando o atalho "Pesquisas Nave" na area de trabalho ...
+echo.
+echo [3/3] Criando o atalho "Pesquisas Nave" na area de trabalho ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0criar_atalho.ps1" || goto :erro
 
 echo.
@@ -42,8 +31,8 @@ exit /b 0
 
 :erro
 echo.
-echo Algo deu errado - veja a mensagem acima.
-echo Se preferir nao compilar, use iniciar.bat (ele roda direto pelo Python).
+echo Algo deu errado - copie a mensagem acima para pedir ajuda.
+echo Sem compilar, setup\staff.bat faz o mesmo rodando direto pelo Python.
 echo.
 pause
 exit /b 1
