@@ -55,7 +55,8 @@ Todos os `*/search` são `GET` com um parâmetro `q` contendo JSON (URL-encoded)
 | Passo | Chamada |
 | --- | --- |
 | Busca por usuário | `GET /user/search?language=pt&q=…` com `{"type":"search","field":"username","value":"…"}` |
-| Busca por nome | mesma rota, `operator:has, relationship:person` com `full_name` **ou** `social_name` (`type:search`) |
+| Busca por nome | mesma rota, `operator:has, relationship:person` com `full_name` **ou** `social_name` (`type:search`). Atenção: `type:search` é **aproximada** (até 25 candidatos por relevância; `total` fixo em 100); a condição de **igualdade** (`{"field":"full_name","value":…}`, sem `type`) funciona e ignora caixa/acentos |
+| Busca por CPF | mesma rota, `relationship:person`, `{"field":"cpf_number","value":"<11 dígitos, sem pontuação>"}` |
 | Abrir o frequentador | `GET /user/search` com `{"field":"id","value":<user_id>}` e `with` amplo (`person`, `person.units`, `person.neighborhood`, `frequenter.responsibles…`) |
 | Matrículas dele | `GET /capacitation/enrollment/search` com `operator:has, relationship:"frequenter.user", field:id` e `with-has:["group.course","group.unit"]` |
 | Listas auxiliares | `GET /special_needs`, `/federative_unit`, `/city?federative_unit_id=`, `/neighborhood?city_id=`, `/educational_stage` |

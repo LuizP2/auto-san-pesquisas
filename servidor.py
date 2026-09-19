@@ -12,6 +12,7 @@ que pode ser executada em lote.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import re
@@ -24,6 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pesquisa  # também garante o .venv (re-executa este script com o Python certo)
+import planilha
 import san2
 
 PAGINA = pesquisa.RECURSOS / "web" / "index.html"
@@ -283,7 +285,7 @@ def mesclar_contas(existentes: list[dict], novas: list[dict], padrao: dict) -> t
         faltando = [p for p, _ in pesquisa.PERGUNTAS_PERFIL if not respostas.get(p)]
         if faltando:
             raise RequisicaoInvalida(
-                f'Não consegui deduzir "{faltando[0]}" para {nova["usuario"]}; marque uma resposta padrão no formulário.'
+                f'Não consegui deduzir "{faltando[0]}" para {nova["usuario"]}; marque uma resposta padrão no formulário ou informe a turma.'
             )
         atual = por_usuario.get(nova["usuario"])
         if atual:
@@ -296,18 +298,11 @@ def mesclar_contas(existentes: list[dict], novas: list[dict], padrao: dict) -> t
     return list(por_usuario.values()), adicionadas, atualizadas
 
 
-def importar_do_san2(dados: dict) -> dict:
-    """Login no SAN2 (token fica em memória) + importação de turma ou frequentador para a lista."""
+def cliente_san2(dados: dict) -> tuple[san2.San2, str]:
+    """Valida/salva as credenciais do SAN2 e a senha padrão; devolve (cliente logado, senha padrão)."""
     usuario = str(dados.get("san2_usuario") or "").strip()
     if not usuario:
         raise RequisicaoInvalida("Informe o usuário do SAN2.")
-    termo = str(dados.get("termo") or "").strip()
-    if not termo:
-        raise RequisicaoInvalida("Informe o código da turma ou o login/nome do frequentador.")
-    modo = dados.get("modo") or "turma"
-    if modo not in ("turma", "frequentador"):
-        raise RequisicaoInvalida("Modo inválido.")
-
     config = pesquisa.carregar_config(pesquisa.CONFIG_PADRAO) or {}
     senha = str(dados.get("san2_senha") or "") or config.get("san2_senha") or ""
     if not senha:
@@ -325,12 +320,13 @@ def importar_do_san2(dados: dict) -> dict:
     pesquisa.salvar_config(pesquisa.CONFIG_PADRAO, config)
 
     try:
-        cliente = SESSAO_SAN2.cliente(usuario, senha)
-        importar = san2.importar_turma if modo == "turma" else san2.importar_frequentador
-        resultado = importar(cliente, termo, senha_padrao)
+        return SESSAO_SAN2.cliente(usuario, senha), senha_padrao
     except san2.ErroSan2 as e:
         raise RequisicaoInvalida(str(e)) from None
 
+
+def guardar_importacao(dados: dict, resultado: dict) -> dict:
+    """Mescla as contas importadas na lista e monta a resposta para a página."""
     padrao = {p: r for p, r in (dados.get("respostas_padrao") or {}).items() if r}
     contas, adicionadas, atualizadas = mesclar_contas(carregar_contas(), resultado["contas"], padrao)
     salvar_contas(contas)
@@ -341,6 +337,61 @@ def importar_do_san2(dados: dict) -> dict:
         "atualizadas": atualizadas,
         "contas": contas_publicas(),
     }
+
+
+def importar_do_san2(dados: dict) -> dict:
+    """Importação de uma turma inteira ou de um frequentador."""
+    termo = str(dados.get("termo") or "").strip()
+    if not termo:
+        raise RequisicaoInvalida("Informe o código da turma ou o login/nome do frequentador.")
+    modo = dados.get("modo") or "turma"
+    if modo not in ("turma", "frequentador"):
+        raise RequisicaoInvalida("Modo inválido.")
+    cliente, senha_padrao = cliente_san2(dados)
+    try:
+        importar = san2.importar_turma if modo == "turma" else san2.importar_frequentador
+        resultado = importar(cliente, termo, senha_padrao)
+    except san2.ErroSan2 as e:
+        raise RequisicaoInvalida(str(e)) from None
+    return guardar_importacao(dados, resultado)
+
+
+LIMITE_PLANILHA = 5 * 1024 * 1024
+
+
+def importar_planilha(dados: dict) -> dict:
+    """Planilha (.xlsx/.csv em base64) com nome/login/CPF dos alunos: localiza cada um no SAN."""
+    nome_arquivo = str(dados.get("arquivo_nome") or "planilha.xlsx")
+    try:
+        conteudo = base64.b64decode(str(dados.get("arquivo_b64") or ""), validate=True)
+    except ValueError:
+        raise RequisicaoInvalida("Arquivo inválido.") from None
+    if not conteudo:
+        raise RequisicaoInvalida("Escolha a planilha (.xlsx ou .csv).")
+    if len(conteudo) > LIMITE_PLANILHA:
+        raise RequisicaoInvalida("A planilha é grande demais (limite de 5 MB).")
+    try:
+        linhas, _ = planilha.ler_planilha(nome_arquivo, conteudo)
+    except planilha.ErroPlanilha as e:
+        raise RequisicaoInvalida(str(e)) from None
+
+    cliente, senha_padrao = cliente_san2(dados)
+    turma = str(dados.get("turma") or "").strip() or None
+    try:
+        resultado = san2.importar_planilha(cliente, linhas, turma, senha_padrao)
+    except san2.ErroSan2 as e:
+        raise RequisicaoInvalida(str(e)) from None
+
+    resposta = guardar_importacao(dados, resultado)
+    relatorio = resultado["relatorio"]
+    resposta["relatorio"] = relatorio
+    resposta["resumo"] = {
+        "linhas": len(relatorio),
+        "encontrados": sum(1 for r in relatorio if r["status"] == "ok"),
+        "ambiguos": sum(1 for r in relatorio if r["status"] == "ambiguo"),
+        "nao_encontrados": sum(1 for r in relatorio if r["status"] == "nao_encontrado"),
+    }
+    return resposta
 
 
 def validar_pedido(dados: dict) -> tuple[dict, str, bool, bool]:
@@ -433,6 +484,8 @@ class Manipulador(BaseHTTPRequestHandler):
                 self._json({"ok": True, "contas": len(contas)})
             elif rota.path == "/api/san2/importar":
                 self._json(importar_do_san2(self._ler_json()))
+            elif rota.path == "/api/san2/planilha":
+                self._json(importar_planilha(self._ler_json()))
             elif rota.path == "/api/fechar":
                 EXECUCAO.pedir_fechamento()
                 self._json({"ok": True})

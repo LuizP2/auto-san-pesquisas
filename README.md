@@ -53,8 +53,8 @@ Abre <http://127.0.0.1:8765/> no navegador. Na página:
   padrão para a lista de contas.
 - **Demais perguntas** — o que todas as outras perguntas recebem.
 - **Várias contas → Importar do SAN2** — informe seu usuário/senha de staff do
-  SAN2, escolha **Turma** (código, ex. `PDM.IKCC.P1.7`) ou **Frequentador**
-  (login ou nome) e clique em **Buscar e adicionar**. O programa entra no SAN2
+  SAN2, escolha **Turma** (código, ex. `PDM.IKCC.P1.7`), **Frequentador**
+  (login ou nome) ou **Planilha** e clique em **Buscar e adicionar**. O programa entra no SAN2
   (navegador invisível, token guardado em memória por 8 h), puxa os
   matriculados e deduz as 5 respostas do cadastro: sexo, faixa etária (data
   de nascimento), período (horário das aulas), atividade (carga horária ≤ 6 h
@@ -63,6 +63,15 @@ Abre <http://127.0.0.1:8765/> no navegador. Na página:
   fica só no seu `config.json`); na execução, quem tiver senha diferente é
   **ignorado** e o resumo diz quem foi. As regras estão em
   `docs/san2-fluxo.md`.
+- **Planilha (Excel/CSV)** — para turmas que ainda não têm inscritos: envie um
+  `.xlsx`/`.csv` com uma coluna **Nome**, **Login** ou **CPF** (as outras são
+  ignoradas; o export de turma do SAN2 serve direto). Cada aluno é procurado no
+  SAN por login, depois CPF, depois nome (igualdade, ignorando acentos e caixa;
+  se não achar, busca aproximada exigindo todas as palavras do nome).
+  Homônimos viram "ambíguo" com os logins candidatos — uma coluna
+  **Nascimento** desempata. Informe o código da turma (opcional) para deduzir
+  período e atividade; sem ele, valem as respostas marcadas no formulário. O
+  relatório mostra quem foi encontrado, quem não foi e os ambíguos.
 - **Várias contas → Ou cole uma lista** — uma conta por linha (`usuário;senha`)
   e **Adicionar em massa**. Na mesma linha você pode informar as respostas de
   perfil daquela pessoa: `usuário;senha;Sexo;Rede municipal;Período;Faixa

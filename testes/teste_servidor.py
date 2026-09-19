@@ -404,6 +404,56 @@ class TesteServidor(unittest.TestCase):
             status, r = self.post("/api/san2/importar", {"san2_usuario": "staff", "san2_senha": "s", "termo": "x", "senha_padrao": "p"})
         self.assertEqual((status, r["erro"]), (400, "Login no SAN2 recusado: senha inválida"))
 
+    def test_planilha_valida_arquivo_antes_do_login(self):
+        base = {"san2_usuario": "staff", "san2_senha": "s", "senha_padrao": "p"}
+        self.assertEqual(self.post("/api/san2/planilha", base)[1]["erro"], "Escolha a planilha (.xlsx ou .csv).")
+        self.assertEqual(self.post("/api/san2/planilha", {**base, "arquivo_b64": "@@@"})[1]["erro"], "Arquivo inválido.")
+        import base64
+        csv = base64.b64encode("Telefone;Email\n1;a\n".encode()).decode()
+        r = self.post("/api/san2/planilha", {**base, "arquivo_nome": "x.csv", "arquivo_b64": csv})[1]
+        self.assertIn("Não achei uma coluna", r["erro"])
+        self.assertFalse(self.config.exists())  # não chegou a salvar credenciais
+
+    def test_planilha_importa_e_relata(self):
+        import base64
+        self.post("/api/contas", {"contas": self.contas_exemplo()})  # ana já existe
+        recebido = {}
+
+        def importar_falso(cliente, linhas, turma, senha):
+            recebido.update(linhas=linhas, turma=turma, senha=senha)
+            return {
+                "turma": {"id": 1, "codigo": "PDM.X.1", "curso": "Curso X", "carga_horaria": 3, "tem_pesquisa": True},
+                "contas": [
+                    {"usuario": "ana", "senha": senha, "nome": "ANA", "respostas": {**RESPOSTAS, "Sexo": "Masculino"}},
+                    {"usuario": "davi", "senha": senha, "nome": "DAVI", "respostas": {**RESPOSTAS}},
+                ],
+                "relatorio": [
+                    {"linha": 2, "aluno": "Ana", "status": "ok", "via": "nome", "login": "ana"},
+                    {"linha": 3, "aluno": "Davi", "status": "ok", "via": "CPF", "login": "davi"},
+                    {"linha": 4, "aluno": "Maria", "status": "ambiguo", "via": "nome", "candidatos": [{"login": "m1", "nascimento": None}]},
+                    {"linha": 5, "aluno": "Zé", "status": "nao_encontrado", "via": None},
+                ],
+            }
+
+        sessao = mock.Mock()
+        sessao.cliente.return_value = "cliente-falso"
+        csv = base64.b64encode("Nome;CPF\nAna;1\nDavi;2\nMaria;\nZé;\n".encode()).decode()
+        with mock.patch.object(servidor, "SESSAO_SAN2", sessao), mock.patch.object(san2, "importar_planilha", importar_falso):
+            status, r = self.post("/api/san2/planilha", {
+                "san2_usuario": "staff", "san2_senha": "s", "senha_padrao": "p", "turma": "pdm.x.1",
+                "arquivo_nome": "alunos.csv", "arquivo_b64": csv, "respostas_padrao": RESPOSTAS,
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual([l["nome"] for l in recebido["linhas"]], ["Ana", "Davi", "Maria", "Zé"])
+        self.assertEqual((recebido["turma"], recebido["senha"]), ("pdm.x.1", "p"))
+        self.assertEqual(r["resumo"], {"linhas": 4, "encontrados": 2, "ambiguos": 1, "nao_encontrados": 1})
+        self.assertEqual((r["adicionadas"], r["atualizadas"]), (1, 1))
+        self.assertEqual([c["usuario"] for c in r["contas"]], ["ana", "bia", "davi"])
+        self.assertEqual(len(r["relatorio"]), 4)
+        salvo = {c["usuario"]: c for c in json.loads(self.contas.read_text(encoding="utf-8"))["contas"]}
+        self.assertEqual(salvo["ana"]["senha"], "a1")  # mantida
+        self.assertEqual(salvo["davi"]["senha"], "p")
+
     def test_captura_nao_permite_sair_da_pasta(self):
         self.capturas.mkdir()
         (self.capturas / "ok.png").write_bytes(b"png")

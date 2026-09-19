@@ -33,9 +33,20 @@ def matricula(username, person, grades=(), cancelada=False, grupo=None):
 
 
 class ClienteFalso:
-    def __init__(self, turma=None, matriculados=(), grade=(), usuarios=(), matriculas=()):
+    def __init__(self, turma=None, matriculados=(), grade=(), usuarios=(), matriculas=(), cadastro=()):
         self._turma, self._matriculados, self._grade = turma, list(matriculados), list(grade)
         self._usuarios, self._matriculas = list(usuarios), list(matriculas)
+        self.cadastro = list(cadastro)  # usuários "no SAN" para por_login/por_cpf/por_nome
+
+    def por_login(self, login):
+        return [u for u in self.cadastro if u["username"] == login]
+
+    def por_cpf(self, cpf):
+        return [u for u in self.cadastro if u["person"].get("cpf_number") == cpf]
+
+    def por_nome(self, nome):
+        n = san2.pesquisa.normalizar(nome)
+        return [u for u in self.cadastro if san2.pesquisa.normalizar(u["person"]["full_name"]) == n]
 
     def turma(self, codigo):
         if self._turma and str(codigo).upper() in (self._turma["code"], str(self._turma["id"])):
@@ -175,6 +186,58 @@ class TesteImportacao(unittest.TestCase):
         self.assertIn("use o login exato", str(ctx.exception))
         with self.assertRaises(san2.ErroSan2):
             san2.importar_frequentador(ClienteFalso(), "ninguem")
+
+
+class TestePlanilha(unittest.TestCase):
+    def setUp(self):
+        self.ana1 = {"id": 1, "username": "ana1", "person": {**pessoa("F", "01/01/2010", "Municipal", "ANA SILVA"), "cpf_number": "11111111111"}}
+        self.ana2 = {"id": 2, "username": "ana2", "person": {**pessoa("F", "02/02/2011", None, "ANA SILVA"), "cpf_number": "22222222222"}}
+        self.beto = {"id": 3, "username": "beto", "person": {**pessoa("M", "03/03/2012", "Municipal", "BETO LIMA"), "cpf_number": "33333333333"}}
+        self.cliente = ClienteFalso(cadastro=[self.ana1, self.ana2, self.beto])
+
+    def linha(self, **campos):
+        return {"n": 2, "nome": "", "login": "", "cpf": "", "nascimento": "", **campos}
+
+    def test_localizar_por_login_cpf_e_nome(self):
+        self.assertEqual(san2.localizar(self.cliente, self.linha(login="beto"))["via"], "login")
+        r = san2.localizar(self.cliente, self.linha(nome="Zé", cpf="33333333333"))
+        self.assertEqual((r["status"], r["via"], r["user"]["username"]), ("ok", "CPF", "beto"))
+        r = san2.localizar(self.cliente, self.linha(nome="beto lima"))
+        self.assertEqual((r["status"], r["via"]), ("ok", "nome"))
+
+    def test_localizar_homonimos_desempata_por_nascimento(self):
+        r = san2.localizar(self.cliente, self.linha(nome="Ana Silva"))
+        self.assertEqual(r["status"], "ambiguo")
+        self.assertEqual([u["username"] for u in r["candidatos"]], ["ana1", "ana2"])
+        r = san2.localizar(self.cliente, self.linha(nome="Ana Silva", nascimento="02/02/2011"))
+        self.assertEqual((r["status"], r["user"]["username"]), ("ok", "ana2"))
+        # nascimento que não bate com ninguém: continua ambíguo
+        self.assertEqual(san2.localizar(self.cliente, self.linha(nome="Ana Silva", nascimento="09/09/1999"))["status"], "ambiguo")
+
+    def test_localizar_login_errado_cai_para_o_cpf(self):
+        r = san2.localizar(self.cliente, self.linha(login="inexistente", cpf="11111111111", nome="Outro"))
+        self.assertEqual((r["status"], r["via"], r["user"]["username"]), ("ok", "CPF", "ana1"))
+        self.assertEqual(san2.localizar(self.cliente, self.linha(nome="Ninguém"))["status"], "nao_encontrado")
+
+    def test_importar_planilha_com_turma(self):
+        turma = {"id": 9, "code": "PDM.X.1", "course": {"name": "Curso", "workload": 3}, "satisfaction_survey": {}}
+        self.cliente._turma, self.cliente._grade = turma, [{"date": "17/09/2026", "start_time": "14:00:00"}]
+        linhas = [self.linha(nome="Beto Lima"), {**self.linha(nome="Ana Silva"), "n": 3}, {**self.linha(nome="Ninguém"), "n": 4}]
+        r = san2.importar_planilha(self.cliente, linhas, "PDM.X.1", senha="s")
+        self.assertEqual(r["turma"]["codigo"], "PDM.X.1")
+        self.assertEqual([c["usuario"] for c in r["contas"]], ["beto"])
+        self.assertEqual(r["contas"][0]["respostas"][san2.P_PERIODO], "Tarde")
+        self.assertEqual(r["contas"][0]["respostas"][san2.P_ATIVIDADE], "Oficina")
+        self.assertEqual([(i["linha"], i["status"]) for i in r["relatorio"]], [(2, "ok"), (3, "ambiguo"), (4, "nao_encontrado")])
+        self.assertEqual(r["relatorio"][1]["candidatos"], [{"login": "ana1", "nascimento": "01/01/2010"}, {"login": "ana2", "nascimento": "02/02/2011"}])
+        with self.assertRaises(san2.ErroSan2):
+            san2.importar_planilha(self.cliente, linhas, "NAO.EXISTE")
+
+    def test_importar_planilha_sem_turma_nao_deduz_periodo(self):
+        r = san2.importar_planilha(self.cliente, [self.linha(login="beto")])
+        self.assertIsNone(r["turma"])
+        self.assertNotIn(san2.P_PERIODO, r["contas"][0]["respostas"])
+        self.assertEqual(r["contas"][0]["respostas"][san2.P_SEXO], "Masculino")
 
 
 if __name__ == "__main__":

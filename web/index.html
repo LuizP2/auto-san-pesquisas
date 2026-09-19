@@ -121,6 +121,9 @@
   .linha-import { display: grid; grid-template-columns: auto minmax(160px, 1fr); gap: 10px; margin-top: 12px; align-items: center; }
   .linha-import select { width: auto; }
   .linha-import button { grid-column: 1 / -1; justify-self: start; white-space: nowrap; }
+  .linha-import .largo { grid-column: 1 / -1; }
+  input[type=file] { width: 100%; padding: 8px 12px; border-radius: 10px; font: inherit; color: var(--texto-2); background: var(--painel-2); border: 1px solid var(--borda); }
+  input[type=file]::file-selector-button { font: inherit; font-weight: 600; padding: 4px 12px; margin-right: 10px; border-radius: 8px; border: 1px solid var(--laranja-2); background: transparent; color: var(--laranja-2); cursor: pointer; }
   @media (max-width: 560px) { .linha-import { grid-template-columns: 1fr; } }
   .linha-select input[type=text] { width: 120px; }
   .tabela { margin-top: 16px; overflow: auto; border: 1px solid var(--borda); border-radius: 10px; }
@@ -206,9 +209,10 @@
 
       <div class="subsecao">
         <h3>Importar do SAN2</h3>
-        <p class="dica">Entra no SAN2 com o seu usuário de staff e puxa os matriculados de uma turma (ou um frequentador) com
-          sexo, faixa etária, período, atividade e rede municipal já deduzidos do cadastro. A senha de cada um é a padrão
-          da unidade (informe abaixo; fica salva só neste computador); quem tiver senha diferente é ignorado na execução.</p>
+        <p class="dica">Entra no SAN2 com o seu usuário de staff e puxa os matriculados de uma turma, um frequentador, ou os alunos
+          de uma planilha (para turmas sem inscritos), com sexo, faixa etária, período, atividade e rede municipal já deduzidos
+          do cadastro. A senha de cada um é a padrão da unidade (informe abaixo; fica salva só neste computador); quem tiver
+          senha diferente é ignorado na execução.</p>
         <div class="campos" style="margin-top:12px">
           <label class="campo">Usuário do SAN2
             <input type="text" id="san2Usuario" autocomplete="off">
@@ -222,8 +226,13 @@
           <select id="san2Modo">
             <option value="turma">Turma</option>
             <option value="frequentador">Frequentador</option>
+            <option value="planilha">Planilha (Excel/CSV)</option>
           </select>
           <input type="text" id="san2Termo" placeholder="código da turma, ex.: PDM.IKCC.P1.7" spellcheck="false">
+          <input type="file" id="san2Arquivo" accept=".xlsx,.csv,.txt" hidden>
+          <input type="text" id="san2Turma" class="largo" placeholder="turma (código) — opcional: define período e atividade dos alunos" spellcheck="false" hidden>
+          <p id="dicaPlanilha" class="dica largo" hidden>A planilha precisa de uma coluna <code>Nome</code>, <code>Login</code> ou <code>CPF</code> (qualquer ordem; as outras são ignoradas).
+            A busca tenta login, depois CPF, depois nome; <code>Nascimento</code>, se houver, desempata homônimos. O export de turma do SAN2 serve direto.</p>
           <button type="button" id="san2Importar" class="secundario">Buscar e adicionar</button>
         </div>
         <label class="linha-select" style="margin-top:12px">Senha padrão dos frequentadores
@@ -400,8 +409,41 @@
   }
 
   $('#san2Modo').addEventListener('change', () => {
-    $('#san2Termo').placeholder = $('#san2Modo').value === 'turma' ? 'código da turma, ex.: PDM.IKCC.P1.7' : 'login ou nome do frequentador';
+    const modo = $('#san2Modo').value;
+    const planilha = modo === 'planilha';
+    $('#san2Termo').hidden = planilha;
+    $('#san2Arquivo').hidden = !planilha;
+    $('#san2Turma').hidden = !planilha;
+    $('#dicaPlanilha').hidden = !planilha;
+    $('#san2Importar').textContent = planilha ? 'Enviar planilha e buscar' : 'Buscar e adicionar';
+    $('#san2Termo').placeholder = modo === 'turma' ? 'código da turma, ex.: PDM.IKCC.P1.7' : 'login ou nome do frequentador';
   });
+
+  function lerArquivoBase64(arquivo) {
+    return new Promise((resolve, reject) => {
+      const leitor = new FileReader();
+      leitor.onload = () => resolve(String(leitor.result).split(',')[1] || '');
+      leitor.onerror = () => reject(leitor.error);
+      leitor.readAsDataURL(arquivo);
+    });
+  }
+
+  function textoRelatorio(r) {
+    const linhas = [];
+    if (r.turma) linhas.push(`Turma ${r.turma.codigo} — ${r.turma.curso} (${r.turma.carga_horaria} h).`);
+    const s = r.resumo;
+    linhas.push(`${s.encontrados} de ${s.linhas} aluno${s.linhas === 1 ? '' : 's'} encontrado${s.encontrados === 1 ? '' : 's'} no SAN` +
+      ` — ${r.adicionadas} adicionado${r.adicionadas === 1 ? '' : 's'}${r.atualizadas ? `, ${r.atualizadas} atualizado${r.atualizadas === 1 ? '' : 's'}` : ''}.`);
+    for (const item of r.relatorio) {
+      if (item.status === 'ambiguo') {
+        const c = item.candidatos.map(x => x.login + (x.nascimento ? ` (${x.nascimento})` : '')).join(', ');
+        linhas.push(`Linha ${item.linha} (${item.aluno}): mais de um cadastro com esse ${item.via} — acrescente o login ou o CPF na planilha. Candidatos: ${c}`);
+      } else if (item.status === 'nao_encontrado') {
+        linhas.push(`Linha ${item.linha} (${item.aluno}): não encontrado no SAN.`);
+      }
+    }
+    return { texto: linhas.join('\n'), ok: s.ambiguos + s.nao_encontrados === 0 };
+  }
 
   $('#san2Importar').addEventListener('click', async () => {
     esconderAviso($('#avisoSan2'));
@@ -409,11 +451,24 @@
     botao.disabled = true;
     botao.textContent = 'Entrando no SAN2 e buscando…';
     try {
-      const r = await postar('/api/san2/importar', {
+      const credenciais = {
         san2_usuario: $('#san2Usuario').value.trim(), san2_senha: $('#san2Senha').value, guardar_san2: $('#san2Guardar').checked,
-        modo: $('#san2Modo').value, termo: $('#san2Termo').value.trim(), senha_padrao: $('#senhaPadrao').value.trim(),
-        respostas_padrao: respostasMarcadas(),
-      });
+        senha_padrao: $('#senhaPadrao').value.trim(), respostas_padrao: respostasMarcadas(),
+      };
+      if ($('#san2Modo').value === 'planilha') {
+        const arquivo = $('#san2Arquivo').files[0];
+        if (!arquivo) { mostrarAviso($('#avisoSan2'), 'Escolha a planilha (.xlsx ou .csv).'); return; }
+        const r = await postar('/api/san2/planilha', {
+          ...credenciais, turma: $('#san2Turma').value.trim(), arquivo_nome: arquivo.name, arquivo_b64: await lerArquivoBase64(arquivo),
+        });
+        if (!r.ok) { mostrarAviso($('#avisoSan2'), r.erro); return; }
+        contas = r.contas;
+        renderContas();
+        const rel = textoRelatorio(r);
+        mostrarAviso($('#avisoSan2'), rel.texto, rel.ok);
+        return;
+      }
+      const r = await postar('/api/san2/importar', { ...credenciais, modo: $('#san2Modo').value, termo: $('#san2Termo').value.trim() });
       if (!r.ok) { mostrarAviso($('#avisoSan2'), r.erro); return; }
       contas = r.contas;
       renderContas();
@@ -424,7 +479,7 @@
       $('#san2Termo').value = '';
     } finally {
       botao.disabled = false;
-      botao.textContent = 'Buscar e adicionar';
+      botao.textContent = $('#san2Modo').value === 'planilha' ? 'Enviar planilha e buscar' : 'Buscar e adicionar';
     }
   });
 

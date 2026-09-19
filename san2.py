@@ -265,6 +265,39 @@ class San2:
             }],
         }).get("data") or []
 
+    _ATIVO = {"operator": "has", "relationship": "frequenter", "conditions": [{"field": "enabled", "value": 1}]}
+    _COM_PERFIL = {"with": ["person.educationalInstitution.type"], "max": 25}
+
+    def _por_pessoa(self, condicoes: list[dict]) -> list[dict]:
+        return self.buscar("user/search", {
+            **self._COM_PERFIL,
+            "filters": [self._ATIVO, {"operator": "has", "relationship": "person", "conditions": condicoes}],
+        }).get("data") or []
+
+    def por_login(self, login: str) -> list[dict]:
+        return self.buscar("user/search", {
+            **self._COM_PERFIL, "filters": [self._ATIVO, {"conditions": [{"field": "username", "value": login.strip()}]}],
+        }).get("data") or []
+
+    def por_cpf(self, cpf: str) -> list[dict]:
+        return self._por_pessoa([{"field": "cpf_number", "value": cpf}])
+
+    def por_nome(self, nome: str) -> list[dict]:
+        """Igualdade (o SAN ignora caixa e acentos); se nada, a busca aproximada filtrada
+        localmente por quem tem todas as palavras do nome."""
+        iguais = self._por_pessoa([
+            {"field": "full_name", "value": nome},
+            {"operator": "or", "field": "social_name", "value": nome},
+        ])
+        if iguais:
+            return iguais
+        palavras = set(pesquisa.normalizar(nome).split())
+        aproximados = self._por_pessoa([{"type": "search", "field": "full_name", "value": nome}])
+        return [
+            u for u in aproximados
+            if u.get("person") and palavras <= set(pesquisa.normalizar(u["person"].get("full_name") or "").split())
+        ]
+
     def matriculas(self, user_id: int, maximo: int = 10) -> list[dict]:
         return self.buscar("capacitation/enrollment/search", {
             "with-has": ["group.course"],
@@ -350,4 +383,65 @@ def importar_frequentador(cliente: San2, termo: str, senha: str = SENHA_PADRAO) 
     return {
         "turma": {"codigo": turma.get("code"), "curso": (turma.get("course") or {}).get("name"), "carga_horaria": carga} if turma else None,
         "contas": [conta],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Importação por planilha: cada linha vira uma busca (login -> CPF -> nome)
+# ---------------------------------------------------------------------------
+
+
+def localizar(cliente: San2, linha: dict) -> dict:
+    """linha: {"nome", "login", "cpf", "nascimento"} -> {"status": ok|ambiguo|nao_encontrado, "user", "via", "candidatos"}."""
+    tentativas = []
+    if linha.get("login"):
+        tentativas.append(("login", lambda: cliente.por_login(linha["login"])))
+    if linha.get("cpf"):
+        tentativas.append(("CPF", lambda: cliente.por_cpf(linha["cpf"])))
+    if linha.get("nome"):
+        tentativas.append(("nome", lambda: cliente.por_nome(linha["nome"])))
+
+    for via, buscar in tentativas:
+        achados = [u for u in buscar() if u.get("username")]
+        if not achados:
+            continue
+        if len(achados) > 1 and linha.get("nascimento"):
+            achados = [u for u in achados if (u.get("person") or {}).get("birthdate") == linha["nascimento"]] or achados
+        if len(achados) == 1:
+            return {"status": "ok", "user": achados[0], "via": via, "candidatos": []}
+        return {"status": "ambiguo", "user": None, "via": via, "candidatos": achados}
+    return {"status": "nao_encontrado", "user": None, "via": None, "candidatos": []}
+
+
+def importar_planilha(cliente: San2, linhas: list[dict], turma_codigo: str | None = None, senha: str = SENHA_PADRAO) -> dict:
+    """Localiza cada aluno da planilha. Com o código da turma, período e atividade
+    vêm dela; sem ele, ficam para o padrão do formulário."""
+    turma, carga, grades = None, None, []
+    if turma_codigo:
+        turma = cliente.turma(turma_codigo)
+        if not turma:
+            raise ErroSan2(f'Turma "{turma_codigo}" não encontrada.')
+        carga = (turma.get("course") or {}).get("workload")
+        grades = cliente.grades(turma["id"])
+
+    contas, relatorio = [], []
+    for linha in linhas:
+        rotulo = linha.get("nome") or linha.get("login") or linha.get("cpf")
+        r = localizar(cliente, linha)
+        item = {"linha": linha["n"], "aluno": rotulo, "status": r["status"], "via": r["via"]}
+        if r["status"] == "ok":
+            contas.append(conta_de(r["user"], carga, grades, senha))
+            item["login"] = r["user"]["username"]
+        elif r["status"] == "ambiguo":
+            item["candidatos"] = [
+                {"login": u["username"], "nascimento": (u.get("person") or {}).get("birthdate")} for u in r["candidatos"][:6]
+            ]
+        relatorio.append(item)
+    return {
+        "turma": {
+            "id": turma["id"], "codigo": turma["code"], "curso": (turma.get("course") or {}).get("name"),
+            "carga_horaria": carga, "tem_pesquisa": bool(turma.get("satisfaction_survey")),
+        } if turma else None,
+        "contas": contas,
+        "relatorio": relatorio,
     }
