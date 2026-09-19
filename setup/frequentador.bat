@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 setlocal
 rem Cria na area de trabalho o atalho "Pesquisa Nave" (abre o site da pesquisa de satisfacao
 rem no navegador padrao, para o frequentador responder sozinho) e ja abre o site.
